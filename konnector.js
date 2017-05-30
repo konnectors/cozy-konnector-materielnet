@@ -10,14 +10,14 @@ const { log,
     saveDataAndFile,
     models,
     linkBankOperation
-} = require('cozy-konnector-libs');
+} = require('cozy-konnector-libs')
 
-const Bill = models.bill;
+const Bill = models.bill
 
 const logger = {
-    info: msg => log('info', msg),
-    error: msg => log('error', msg),
-};
+  info: msg => log('info', msg),
+  error: msg => log('error', msg)
+}
 
 const baseURL = 'https://www.materiel.net/'
 
