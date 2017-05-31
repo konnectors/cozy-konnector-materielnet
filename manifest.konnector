@@ -1,10 +1,9 @@
 {
   "version": "1.0.0",
-  "name": "konnector name",
+  "name": "Materiel.net",
   "type": "node",
-  "slug": "konnectorslug",
-  "description": "description",
-  "source": "git://github.com/cozy/cozy-konnector-thename.git",
+  "slug": "materielnet",
+  "source": "git://github.com/nicofrand/cozy-konnector-materielnet.git",
   "fields": {
     "save_folder": {
       "doctype": "io.cozy.files",
@@ -45,7 +44,7 @@
     }
   },
   "developer": {
-    "name": "yourname",
-    "url": "your web site"
+    "name": "nicofrand",
+    "url": "https://nicofrand.eu"
   }
 }
