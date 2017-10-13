@@ -24,7 +24,7 @@
         "standalone": "env-cmd ./data/env_standalone.js npm start",
         "build": "webpack",
         "lint": "standard --fix konnector.js",
-        "deploy:travis": "git-directory-deploy --username nicofrand --email mail@nicofrand.eu --branch build --directory build/ --repo=https://$GITHUB_TOKEN@github.com/nicofrand/cozy-konnector-materielnet.git",
+        "deploy:travis": "git-directory-deploy --username nicofrand --email mail@nicofrand.eu --directory build/ --repo=https://$GITHUB_TOKEN@github.com/nicofrand/cozy-konnector-materielnet.git",
         "deploy": "git-directory-deploy --branch build --directory build/ --repo=https://github.com/nicofrand/cozy-konnector-materielnet.git"
     },
     "devDependencies": {
