@@ -138,7 +138,7 @@ yarn lint
 
 ### Maintainer
 
-The lead maintainers for this konnector is <YOUR NAME>
+The lead maintainers for this konnector is Nicolas Frandeboeuf (nicofrand).
 
 
 ### Get in touch
