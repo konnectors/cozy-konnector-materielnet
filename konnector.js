@@ -72,6 +72,7 @@ function login(requiredFields, billInfos, data, next) {
     logger.info('Signing in')
     request(signInOptions, (err, res) => {
         if (err) {
+            logger.error('LOGIN_FAILED')
             logger.error('Signin failed');
             return next('LOGIN_FAILED');
         }
