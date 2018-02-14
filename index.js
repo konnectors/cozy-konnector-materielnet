@@ -73979,6 +73979,7 @@ function fetchBillPageBillsList(options, cb) {
 function login(requiredFields, billInfos, data, next) {
     const signInOptions = {
         method: 'POST',
+        ecdhCurve: 'auto',
         jar: true,
         url: `${baseURL}pm/client/logincheck.nt.html`,
         form: {
@@ -73990,6 +73991,7 @@ function login(requiredFields, billInfos, data, next) {
 
     const billsOptions = {
         method: 'GET',
+        ecdhCurve: 'auto',
         jar: true,
         url: `${baseURL}pm/client/commande.html`
     };
