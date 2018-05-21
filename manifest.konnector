@@ -1,5 +1,5 @@
 {
-  "version": "1.0.0",
+  "version": "1.0.3",
   "name": "Materiel.net",
   "type": "node",
   "slug": "materielnet",
@@ -43,6 +43,7 @@
       "verbs": ["GET"]
     }
   },
+  "editor": "nicofrand",
   "developer": {
     "name": "nicofrand",
     "url": "https://nicofrand.eu"

@@ -1899,7 +1899,7 @@ function loadLocale(name) {
             module && module.exports) {
         try {
             oldLocale = globalLocale._abbr;
-            __webpack_require__(620)("./" + name);
+            __webpack_require__(623)("./" + name);
             // because defineLocale currently also sets the global locale, we
             // want to undo that for lazy loaded locales
             getSetGlobalLocale(oldLocale);
@@ -5745,7 +5745,7 @@ PrivateKey.prototype.derive = function (newType, newSize) {
 
 	if (this.type === 'ed25519' && newType === 'curve25519') {
 		if (ed === undefined)
-			ed = __webpack_require__(134);
+			ed = __webpack_require__(136);
 
 		priv = this.part.r.data;
 		if (priv[0] === 0x00)
@@ -5764,7 +5764,7 @@ PrivateKey.prototype.derive = function (newType, newSize) {
 		}));
 	} else if (this.type === 'curve25519' && newType === 'ed25519') {
 		if (ed === undefined)
-			ed = __webpack_require__(134);
+			ed = __webpack_require__(136);
 
 		priv = this.part.r.data;
 		if (priv[0] === 0x00)
@@ -8620,7 +8620,7 @@ module.exports = {
   cleanUpVarErrors: cleanUpVarErrors,
   schemaHasRules: schemaHasRules,
   schemaHasRulesExcept: schemaHasRulesExcept,
-  stableStringify: __webpack_require__(136),
+  stableStringify: __webpack_require__(138),
   toQuotedString: toQuotedString,
   getPathExpr: getPathExpr,
   getPath: getPath,
@@ -23901,10 +23901,10 @@ module.exports.httpify = function (resp, headers) {
 var parse = __webpack_require__(78),
     isHtml = __webpack_require__(58).isHtml,
     _ = {
-      extend: __webpack_require__(212),
-      bind: __webpack_require__(137),
+      extend: __webpack_require__(213),
+      bind: __webpack_require__(139),
       forEach: __webpack_require__(93),
-      defaults: __webpack_require__(213)
+      defaults: __webpack_require__(214)
     };
 
 /*
@@ -24056,8 +24056,8 @@ var serialize = __webpack_require__(128),
     select = __webpack_require__(197),
     parse = __webpack_require__(78),
     _ = {
-      merge: __webpack_require__(613),
-      defaults: __webpack_require__(213)
+      merge: __webpack_require__(616),
+      defaults: __webpack_require__(214)
     };
 
 /**
@@ -30247,6 +30247,420 @@ module.exports = [
 /* 134 */
 /***/ (function(module, exports, __webpack_require__) {
 
+
+/**
+ * body.js
+ *
+ * Body interface provides common methods for Request and Response
+ */
+
+var convert = __webpack_require__(536).convert;
+var bodyStream = __webpack_require__(598);
+var PassThrough = __webpack_require__(11).PassThrough;
+var FetchError = __webpack_require__(211);
+
+module.exports = Body;
+
+/**
+ * Body class
+ *
+ * @param   Stream  body  Readable stream
+ * @param   Object  opts  Response options
+ * @return  Void
+ */
+function Body(body, opts) {
+
+	opts = opts || {};
+
+	this.body = body;
+	this.bodyUsed = false;
+	this.size = opts.size || 0;
+	this.timeout = opts.timeout || 0;
+	this._raw = [];
+	this._abort = false;
+
+}
+
+/**
+ * Decode response as json
+ *
+ * @return  Promise
+ */
+Body.prototype.json = function() {
+
+	var self = this;
+
+	return this._decode().then(function(buffer) {
+		try {
+			return JSON.parse(buffer.toString());
+		} catch (err) {
+			return Body.Promise.reject(new FetchError('invalid json response body at ' + self.url + ' reason: ' + err.message, 'invalid-json'));
+		}
+	});
+
+};
+
+/**
+ * Decode response as text
+ *
+ * @return  Promise
+ */
+Body.prototype.text = function() {
+
+	return this._decode().then(function(buffer) {
+		return buffer.toString();
+	});
+
+};
+
+/**
+ * Decode response as buffer (non-spec api)
+ *
+ * @return  Promise
+ */
+Body.prototype.buffer = function() {
+
+	return this._decode();
+
+};
+
+/**
+ * Decode buffers into utf-8 string
+ *
+ * @return  Promise
+ */
+Body.prototype._decode = function() {
+
+	var self = this;
+
+	if (this.bodyUsed) {
+		return Body.Promise.reject(new Error('body used already for: ' + this.url));
+	}
+
+	this.bodyUsed = true;
+	this._bytes = 0;
+	this._abort = false;
+	this._raw = [];
+
+	return new Body.Promise(function(resolve, reject) {
+		var resTimeout;
+
+		// body is string
+		if (typeof self.body === 'string') {
+			self._bytes = self.body.length;
+			self._raw = [new Buffer(self.body)];
+			return resolve(self._convert());
+		}
+
+		// body is buffer
+		if (self.body instanceof Buffer) {
+			self._bytes = self.body.length;
+			self._raw = [self.body];
+			return resolve(self._convert());
+		}
+
+		// allow timeout on slow response body
+		if (self.timeout) {
+			resTimeout = setTimeout(function() {
+				self._abort = true;
+				reject(new FetchError('response timeout at ' + self.url + ' over limit: ' + self.timeout, 'body-timeout'));
+			}, self.timeout);
+		}
+
+		// handle stream error, such as incorrect content-encoding
+		self.body.on('error', function(err) {
+			reject(new FetchError('invalid response body at: ' + self.url + ' reason: ' + err.message, 'system', err));
+		});
+
+		// body is stream
+		self.body.on('data', function(chunk) {
+			if (self._abort || chunk === null) {
+				return;
+			}
+
+			if (self.size && self._bytes + chunk.length > self.size) {
+				self._abort = true;
+				reject(new FetchError('content size at ' + self.url + ' over limit: ' + self.size, 'max-size'));
+				return;
+			}
+
+			self._bytes += chunk.length;
+			self._raw.push(chunk);
+		});
+
+		self.body.on('end', function() {
+			if (self._abort) {
+				return;
+			}
+
+			clearTimeout(resTimeout);
+			resolve(self._convert());
+		});
+	});
+
+};
+
+/**
+ * Detect buffer encoding and convert to target encoding
+ * ref: http://www.w3.org/TR/2011/WD-html5-20110113/parsing.html#determining-the-character-encoding
+ *
+ * @param   String  encoding  Target encoding
+ * @return  String
+ */
+Body.prototype._convert = function(encoding) {
+
+	encoding = encoding || 'utf-8';
+
+	var ct = this.headers.get('content-type');
+	var charset = 'utf-8';
+	var res, str;
+
+	// header
+	if (ct) {
+		// skip encoding detection altogether if not html/xml/plain text
+		if (!/text\/html|text\/plain|\+xml|\/xml/i.test(ct)) {
+			return Buffer.concat(this._raw);
+		}
+
+		res = /charset=([^;]*)/i.exec(ct);
+	}
+
+	// no charset in content type, peek at response body for at most 1024 bytes
+	if (!res && this._raw.length > 0) {
+		for (var i = 0; i < this._raw.length; i++) {
+			str += this._raw[i].toString()
+			if (str.length > 1024) {
+				break;
+			}
+		}
+		str = str.substr(0, 1024);
+	}
+
+	// html5
+	if (!res && str) {
+		res = /<meta.+?charset=(['"])(.+?)\1/i.exec(str);
+	}
+
+	// html4
+	if (!res && str) {
+		res = /<meta[\s]+?http-equiv=(['"])content-type\1[\s]+?content=(['"])(.+?)\2/i.exec(str);
+
+		if (res) {
+			res = /charset=(.*)/i.exec(res.pop());
+		}
+	}
+
+	// xml
+	if (!res && str) {
+		res = /<\?xml.+?encoding=(['"])(.+?)\1/i.exec(str);
+	}
+
+	// found charset
+	if (res) {
+		charset = res.pop();
+
+		// prevent decode issues when sites use incorrect encoding
+		// ref: https://hsivonen.fi/encoding-menu/
+		if (charset === 'gb2312' || charset === 'gbk') {
+			charset = 'gb18030';
+		}
+	}
+
+	// turn raw buffers into a single utf-8 buffer
+	return convert(
+		Buffer.concat(this._raw)
+		, encoding
+		, charset
+	);
+
+};
+
+/**
+ * Clone body given Res/Req instance
+ *
+ * @param   Mixed  instance  Response or Request instance
+ * @return  Mixed
+ */
+Body.prototype._clone = function(instance) {
+	var p1, p2;
+	var body = instance.body;
+
+	// don't allow cloning a used body
+	if (instance.bodyUsed) {
+		throw new Error('cannot clone body after it is used');
+	}
+
+	// check that body is a stream and not form-data object
+	// note: we can't clone the form-data object without having it as a dependency
+	if (bodyStream(body) && typeof body.getBoundary !== 'function') {
+		// tee instance body
+		p1 = new PassThrough();
+		p2 = new PassThrough();
+		body.pipe(p1);
+		body.pipe(p2);
+		// set instance body to teed body and return the other teed body
+		instance.body = p1;
+		body = p2;
+	}
+
+	return body;
+}
+
+// expose Promise
+Body.Promise = global.Promise;
+
+
+/***/ }),
+/* 135 */
+/***/ (function(module, exports) {
+
+
+/**
+ * headers.js
+ *
+ * Headers class offers convenient helpers
+ */
+
+module.exports = Headers;
+
+/**
+ * Headers class
+ *
+ * @param   Object  headers  Response headers
+ * @return  Void
+ */
+function Headers(headers) {
+
+	var self = this;
+	this._headers = {};
+
+	// Headers
+	if (headers instanceof Headers) {
+		headers = headers.raw();
+	}
+
+	// plain object
+	for (var prop in headers) {
+		if (!headers.hasOwnProperty(prop)) {
+			continue;
+		}
+
+		if (typeof headers[prop] === 'string') {
+			this.set(prop, headers[prop]);
+
+		} else if (typeof headers[prop] === 'number' && !isNaN(headers[prop])) {
+			this.set(prop, headers[prop].toString());
+
+		} else if (headers[prop] instanceof Array) {
+			headers[prop].forEach(function(item) {
+				self.append(prop, item.toString());
+			});
+		}
+	}
+
+}
+
+/**
+ * Return first header value given name
+ *
+ * @param   String  name  Header name
+ * @return  Mixed
+ */
+Headers.prototype.get = function(name) {
+	var list = this._headers[name.toLowerCase()];
+	return list ? list[0] : null;
+};
+
+/**
+ * Return all header values given name
+ *
+ * @param   String  name  Header name
+ * @return  Array
+ */
+Headers.prototype.getAll = function(name) {
+	if (!this.has(name)) {
+		return [];
+	}
+
+	return this._headers[name.toLowerCase()];
+};
+
+/**
+ * Iterate over all headers
+ *
+ * @param   Function  callback  Executed for each item with parameters (value, name, thisArg)
+ * @param   Boolean   thisArg   `this` context for callback function
+ * @return  Void
+ */
+Headers.prototype.forEach = function(callback, thisArg) {
+	Object.getOwnPropertyNames(this._headers).forEach(function(name) {
+		this._headers[name].forEach(function(value) {
+			callback.call(thisArg, value, name, this)
+		}, this)
+	}, this)
+}
+
+/**
+ * Overwrite header values given name
+ *
+ * @param   String  name   Header name
+ * @param   String  value  Header value
+ * @return  Void
+ */
+Headers.prototype.set = function(name, value) {
+	this._headers[name.toLowerCase()] = [value];
+};
+
+/**
+ * Append a value onto existing header
+ *
+ * @param   String  name   Header name
+ * @param   String  value  Header value
+ * @return  Void
+ */
+Headers.prototype.append = function(name, value) {
+	if (!this.has(name)) {
+		this.set(name, value);
+		return;
+	}
+
+	this._headers[name.toLowerCase()].push(value);
+};
+
+/**
+ * Check for header name existence
+ *
+ * @param   String   name  Header name
+ * @return  Boolean
+ */
+Headers.prototype.has = function(name) {
+	return this._headers.hasOwnProperty(name.toLowerCase());
+};
+
+/**
+ * Delete all header values given name
+ *
+ * @param   String  name  Header name
+ * @return  Void
+ */
+Headers.prototype['delete'] = function(name) {
+	delete this._headers[name.toLowerCase()];
+};
+
+/**
+ * Return raw headers (non-spec api)
+ *
+ * @return  Object
+ */
+Headers.prototype.raw = function() {
+	return this._headers;
+};
+
+
+/***/ }),
+/* 136 */
+/***/ (function(module, exports, __webpack_require__) {
+
 "use strict";
 
 
@@ -30259,9 +30673,9 @@ module.exports = [
  * You should have received a copy of the license along with this program.
  */
 
-var dh = __webpack_require__(602);
-var eddsa = __webpack_require__(603);
-var curve255 = __webpack_require__(135);
+var dh = __webpack_require__(605);
+var eddsa = __webpack_require__(606);
+var curve255 = __webpack_require__(137);
 var utils = __webpack_require__(92);
     
     /**
@@ -30286,7 +30700,7 @@ module.exports = ns;
 
 
 /***/ }),
-/* 135 */
+/* 137 */
 /***/ (function(module, exports, __webpack_require__) {
 
 "use strict";
@@ -30514,10 +30928,10 @@ module.exports = ns;
 
 
 /***/ }),
-/* 136 */
+/* 138 */
 /***/ (function(module, exports, __webpack_require__) {
 
-var json = typeof JSON !== 'undefined' ? JSON : __webpack_require__(606);
+var json = typeof JSON !== 'undefined' ? JSON : __webpack_require__(609);
 
 module.exports = function (obj, opts) {
     if (!opts) opts = {};
@@ -30604,7 +31018,7 @@ var objectKeys = Object.keys || function (obj) {
 
 
 /***/ }),
-/* 137 */
+/* 139 */
 /***/ (function(module, exports) {
 
 /**
@@ -31864,420 +32278,6 @@ module.exports = bind;
 
 
 /***/ }),
-/* 138 */
-/***/ (function(module, exports, __webpack_require__) {
-
-
-/**
- * body.js
- *
- * Body interface provides common methods for Request and Response
- */
-
-var convert = __webpack_require__(536).convert;
-var bodyStream = __webpack_require__(598);
-var PassThrough = __webpack_require__(11).PassThrough;
-var FetchError = __webpack_require__(331);
-
-module.exports = Body;
-
-/**
- * Body class
- *
- * @param   Stream  body  Readable stream
- * @param   Object  opts  Response options
- * @return  Void
- */
-function Body(body, opts) {
-
-	opts = opts || {};
-
-	this.body = body;
-	this.bodyUsed = false;
-	this.size = opts.size || 0;
-	this.timeout = opts.timeout || 0;
-	this._raw = [];
-	this._abort = false;
-
-}
-
-/**
- * Decode response as json
- *
- * @return  Promise
- */
-Body.prototype.json = function() {
-
-	var self = this;
-
-	return this._decode().then(function(buffer) {
-		try {
-			return JSON.parse(buffer.toString());
-		} catch (err) {
-			return Body.Promise.reject(new FetchError('invalid json response body at ' + self.url + ' reason: ' + err.message, 'invalid-json'));
-		}
-	});
-
-};
-
-/**
- * Decode response as text
- *
- * @return  Promise
- */
-Body.prototype.text = function() {
-
-	return this._decode().then(function(buffer) {
-		return buffer.toString();
-	});
-
-};
-
-/**
- * Decode response as buffer (non-spec api)
- *
- * @return  Promise
- */
-Body.prototype.buffer = function() {
-
-	return this._decode();
-
-};
-
-/**
- * Decode buffers into utf-8 string
- *
- * @return  Promise
- */
-Body.prototype._decode = function() {
-
-	var self = this;
-
-	if (this.bodyUsed) {
-		return Body.Promise.reject(new Error('body used already for: ' + this.url));
-	}
-
-	this.bodyUsed = true;
-	this._bytes = 0;
-	this._abort = false;
-	this._raw = [];
-
-	return new Body.Promise(function(resolve, reject) {
-		var resTimeout;
-
-		// body is string
-		if (typeof self.body === 'string') {
-			self._bytes = self.body.length;
-			self._raw = [new Buffer(self.body)];
-			return resolve(self._convert());
-		}
-
-		// body is buffer
-		if (self.body instanceof Buffer) {
-			self._bytes = self.body.length;
-			self._raw = [self.body];
-			return resolve(self._convert());
-		}
-
-		// allow timeout on slow response body
-		if (self.timeout) {
-			resTimeout = setTimeout(function() {
-				self._abort = true;
-				reject(new FetchError('response timeout at ' + self.url + ' over limit: ' + self.timeout, 'body-timeout'));
-			}, self.timeout);
-		}
-
-		// handle stream error, such as incorrect content-encoding
-		self.body.on('error', function(err) {
-			reject(new FetchError('invalid response body at: ' + self.url + ' reason: ' + err.message, 'system', err));
-		});
-
-		// body is stream
-		self.body.on('data', function(chunk) {
-			if (self._abort || chunk === null) {
-				return;
-			}
-
-			if (self.size && self._bytes + chunk.length > self.size) {
-				self._abort = true;
-				reject(new FetchError('content size at ' + self.url + ' over limit: ' + self.size, 'max-size'));
-				return;
-			}
-
-			self._bytes += chunk.length;
-			self._raw.push(chunk);
-		});
-
-		self.body.on('end', function() {
-			if (self._abort) {
-				return;
-			}
-
-			clearTimeout(resTimeout);
-			resolve(self._convert());
-		});
-	});
-
-};
-
-/**
- * Detect buffer encoding and convert to target encoding
- * ref: http://www.w3.org/TR/2011/WD-html5-20110113/parsing.html#determining-the-character-encoding
- *
- * @param   String  encoding  Target encoding
- * @return  String
- */
-Body.prototype._convert = function(encoding) {
-
-	encoding = encoding || 'utf-8';
-
-	var ct = this.headers.get('content-type');
-	var charset = 'utf-8';
-	var res, str;
-
-	// header
-	if (ct) {
-		// skip encoding detection altogether if not html/xml/plain text
-		if (!/text\/html|text\/plain|\+xml|\/xml/i.test(ct)) {
-			return Buffer.concat(this._raw);
-		}
-
-		res = /charset=([^;]*)/i.exec(ct);
-	}
-
-	// no charset in content type, peek at response body for at most 1024 bytes
-	if (!res && this._raw.length > 0) {
-		for (var i = 0; i < this._raw.length; i++) {
-			str += this._raw[i].toString()
-			if (str.length > 1024) {
-				break;
-			}
-		}
-		str = str.substr(0, 1024);
-	}
-
-	// html5
-	if (!res && str) {
-		res = /<meta.+?charset=(['"])(.+?)\1/i.exec(str);
-	}
-
-	// html4
-	if (!res && str) {
-		res = /<meta[\s]+?http-equiv=(['"])content-type\1[\s]+?content=(['"])(.+?)\2/i.exec(str);
-
-		if (res) {
-			res = /charset=(.*)/i.exec(res.pop());
-		}
-	}
-
-	// xml
-	if (!res && str) {
-		res = /<\?xml.+?encoding=(['"])(.+?)\1/i.exec(str);
-	}
-
-	// found charset
-	if (res) {
-		charset = res.pop();
-
-		// prevent decode issues when sites use incorrect encoding
-		// ref: https://hsivonen.fi/encoding-menu/
-		if (charset === 'gb2312' || charset === 'gbk') {
-			charset = 'gb18030';
-		}
-	}
-
-	// turn raw buffers into a single utf-8 buffer
-	return convert(
-		Buffer.concat(this._raw)
-		, encoding
-		, charset
-	);
-
-};
-
-/**
- * Clone body given Res/Req instance
- *
- * @param   Mixed  instance  Response or Request instance
- * @return  Mixed
- */
-Body.prototype._clone = function(instance) {
-	var p1, p2;
-	var body = instance.body;
-
-	// don't allow cloning a used body
-	if (instance.bodyUsed) {
-		throw new Error('cannot clone body after it is used');
-	}
-
-	// check that body is a stream and not form-data object
-	// note: we can't clone the form-data object without having it as a dependency
-	if (bodyStream(body) && typeof body.getBoundary !== 'function') {
-		// tee instance body
-		p1 = new PassThrough();
-		p2 = new PassThrough();
-		body.pipe(p1);
-		body.pipe(p2);
-		// set instance body to teed body and return the other teed body
-		instance.body = p1;
-		body = p2;
-	}
-
-	return body;
-}
-
-// expose Promise
-Body.Promise = global.Promise;
-
-
-/***/ }),
-/* 139 */
-/***/ (function(module, exports) {
-
-
-/**
- * headers.js
- *
- * Headers class offers convenient helpers
- */
-
-module.exports = Headers;
-
-/**
- * Headers class
- *
- * @param   Object  headers  Response headers
- * @return  Void
- */
-function Headers(headers) {
-
-	var self = this;
-	this._headers = {};
-
-	// Headers
-	if (headers instanceof Headers) {
-		headers = headers.raw();
-	}
-
-	// plain object
-	for (var prop in headers) {
-		if (!headers.hasOwnProperty(prop)) {
-			continue;
-		}
-
-		if (typeof headers[prop] === 'string') {
-			this.set(prop, headers[prop]);
-
-		} else if (typeof headers[prop] === 'number' && !isNaN(headers[prop])) {
-			this.set(prop, headers[prop].toString());
-
-		} else if (headers[prop] instanceof Array) {
-			headers[prop].forEach(function(item) {
-				self.append(prop, item.toString());
-			});
-		}
-	}
-
-}
-
-/**
- * Return first header value given name
- *
- * @param   String  name  Header name
- * @return  Mixed
- */
-Headers.prototype.get = function(name) {
-	var list = this._headers[name.toLowerCase()];
-	return list ? list[0] : null;
-};
-
-/**
- * Return all header values given name
- *
- * @param   String  name  Header name
- * @return  Array
- */
-Headers.prototype.getAll = function(name) {
-	if (!this.has(name)) {
-		return [];
-	}
-
-	return this._headers[name.toLowerCase()];
-};
-
-/**
- * Iterate over all headers
- *
- * @param   Function  callback  Executed for each item with parameters (value, name, thisArg)
- * @param   Boolean   thisArg   `this` context for callback function
- * @return  Void
- */
-Headers.prototype.forEach = function(callback, thisArg) {
-	Object.getOwnPropertyNames(this._headers).forEach(function(name) {
-		this._headers[name].forEach(function(value) {
-			callback.call(thisArg, value, name, this)
-		}, this)
-	}, this)
-}
-
-/**
- * Overwrite header values given name
- *
- * @param   String  name   Header name
- * @param   String  value  Header value
- * @return  Void
- */
-Headers.prototype.set = function(name, value) {
-	this._headers[name.toLowerCase()] = [value];
-};
-
-/**
- * Append a value onto existing header
- *
- * @param   String  name   Header name
- * @param   String  value  Header value
- * @return  Void
- */
-Headers.prototype.append = function(name, value) {
-	if (!this.has(name)) {
-		this.set(name, value);
-		return;
-	}
-
-	this._headers[name.toLowerCase()].push(value);
-};
-
-/**
- * Check for header name existence
- *
- * @param   String   name  Header name
- * @return  Boolean
- */
-Headers.prototype.has = function(name) {
-	return this._headers.hasOwnProperty(name.toLowerCase());
-};
-
-/**
- * Delete all header values given name
- *
- * @param   String  name  Header name
- * @return  Void
- */
-Headers.prototype['delete'] = function(name) {
-	delete this._headers[name.toLowerCase()];
-};
-
-/**
- * Return raw headers (non-spec api)
- *
- * @return  Object
- */
-Headers.prototype.raw = function() {
-	return this._headers;
-};
-
-
-/***/ }),
 /* 140 */
 /***/ (function(module, exports, __webpack_require__) {
 
@@ -32334,7 +32334,7 @@ function nextTick(fn, arg1, arg2, arg3) {
 "use strict";
 
 
-var jsonSafeStringify = __webpack_require__(605)
+var jsonSafeStringify = __webpack_require__(608)
   , crypto = __webpack_require__(3)
   , Buffer = __webpack_require__(56).Buffer
 
@@ -37018,7 +37018,7 @@ exports.coerce = coerce;
 exports.disable = disable;
 exports.enable = enable;
 exports.enabled = enabled;
-exports.humanize = __webpack_require__(621);
+exports.humanize = __webpack_require__(624);
 
 /**
  * The currently active debug mode names, and names to skip.
@@ -39939,6 +39939,46 @@ module.exports = [
 /* 211 */
 /***/ (function(module, exports, __webpack_require__) {
 
+
+/**
+ * fetch-error.js
+ *
+ * FetchError interface for operational errors
+ */
+
+module.exports = FetchError;
+
+/**
+ * Create FetchError instance
+ *
+ * @param   String      message      Error message for human
+ * @param   String      type         Error type for machine
+ * @param   String      systemError  For Node.js system error
+ * @return  FetchError
+ */
+function FetchError(message, type, systemError) {
+
+	// hide custom error implementation details from end-users
+	Error.captureStackTrace(this, this.constructor);
+
+	this.name = this.constructor.name;
+	this.message = message;
+	this.type = type;
+
+	// when err.type is `system`, err.code contains system error code
+	if (systemError) {
+		this.code = this.errno = systemError.code;
+	}
+
+}
+
+__webpack_require__(2).inherits(FetchError, Error);
+
+
+/***/ }),
+/* 212 */
+/***/ (function(module, exports, __webpack_require__) {
+
 var stream = __webpack_require__(11)
 
 
@@ -39969,7 +40009,7 @@ module.exports.isDuplex   = isDuplex
 
 
 /***/ }),
-/* 212 */
+/* 213 */
 /***/ (function(module, exports) {
 
 /**
@@ -40601,7 +40641,7 @@ module.exports = assignIn;
 
 
 /***/ }),
-/* 213 */
+/* 214 */
 /***/ (function(module, exports) {
 
 /**
@@ -41275,7 +41315,7 @@ module.exports = defaults;
 
 
 /***/ }),
-/* 214 */
+/* 215 */
 /***/ (function(module, exports, __webpack_require__) {
 
 /* WEBPACK VAR INJECTION */(function(module) {var __WEBPACK_AMD_DEFINE_RESULT__;/**
@@ -58367,7 +58407,7 @@ module.exports = defaults;
 /* WEBPACK VAR INJECTION */}.call(exports, __webpack_require__(28)(module)))
 
 /***/ }),
-/* 215 */
+/* 216 */
 /***/ (function(module, exports, __webpack_require__) {
 
 "use strict";
@@ -58385,7 +58425,7 @@ module.exports = defaults;
  * @private
  */
 
-var db = __webpack_require__(619)
+var db = __webpack_require__(622)
 var extname = __webpack_require__(98).extname
 
 /**
@@ -58562,7 +58602,7 @@ function populateMaps (extensions, types) {
 
 
 /***/ }),
-/* 216 */
+/* 217 */
 /***/ (function(module, exports, __webpack_require__) {
 
 //! moment.js locale configuration
@@ -58640,7 +58680,7 @@ return af;
 
 
 /***/ }),
-/* 217 */
+/* 218 */
 /***/ (function(module, exports, __webpack_require__) {
 
 //! moment.js locale configuration
@@ -58704,7 +58744,7 @@ return arDz;
 
 
 /***/ }),
-/* 218 */
+/* 219 */
 /***/ (function(module, exports, __webpack_require__) {
 
 //! moment.js locale configuration
@@ -58768,7 +58808,7 @@ return arKw;
 
 
 /***/ }),
-/* 219 */
+/* 220 */
 /***/ (function(module, exports, __webpack_require__) {
 
 //! moment.js locale configuration
@@ -58899,7 +58939,7 @@ return arLy;
 
 
 /***/ }),
-/* 220 */
+/* 221 */
 /***/ (function(module, exports, __webpack_require__) {
 
 //! moment.js locale configuration
@@ -58964,7 +59004,7 @@ return arMa;
 
 
 /***/ }),
-/* 221 */
+/* 222 */
 /***/ (function(module, exports, __webpack_require__) {
 
 //! moment.js locale configuration
@@ -59074,7 +59114,7 @@ return arSa;
 
 
 /***/ }),
-/* 222 */
+/* 223 */
 /***/ (function(module, exports, __webpack_require__) {
 
 //! moment.js locale configuration
@@ -59138,7 +59178,7 @@ return arTn;
 
 
 /***/ }),
-/* 223 */
+/* 224 */
 /***/ (function(module, exports, __webpack_require__) {
 
 //! moment.js locale configuration
@@ -59285,7 +59325,7 @@ return ar;
 
 
 /***/ }),
-/* 224 */
+/* 225 */
 /***/ (function(module, exports, __webpack_require__) {
 
 //! moment.js locale configuration
@@ -59395,7 +59435,7 @@ return az;
 
 
 /***/ }),
-/* 225 */
+/* 226 */
 /***/ (function(module, exports, __webpack_require__) {
 
 //! moment.js locale configuration
@@ -59534,7 +59574,7 @@ return be;
 
 
 /***/ }),
-/* 226 */
+/* 227 */
 /***/ (function(module, exports, __webpack_require__) {
 
 //! moment.js locale configuration
@@ -59629,7 +59669,7 @@ return bg;
 
 
 /***/ }),
-/* 227 */
+/* 228 */
 /***/ (function(module, exports, __webpack_require__) {
 
 //! moment.js locale configuration
@@ -59753,7 +59793,7 @@ return bn;
 
 
 /***/ }),
-/* 228 */
+/* 229 */
 /***/ (function(module, exports, __webpack_require__) {
 
 //! moment.js locale configuration
@@ -59877,7 +59917,7 @@ return bo;
 
 
 /***/ }),
-/* 229 */
+/* 230 */
 /***/ (function(module, exports, __webpack_require__) {
 
 //! moment.js locale configuration
@@ -59990,7 +60030,7 @@ return br;
 
 
 /***/ }),
-/* 230 */
+/* 231 */
 /***/ (function(module, exports, __webpack_require__) {
 
 //! moment.js locale configuration
@@ -60138,7 +60178,7 @@ return bs;
 
 
 /***/ }),
-/* 231 */
+/* 232 */
 /***/ (function(module, exports, __webpack_require__) {
 
 //! moment.js locale configuration
@@ -60231,7 +60271,7 @@ return ca;
 
 
 /***/ }),
-/* 232 */
+/* 233 */
 /***/ (function(module, exports, __webpack_require__) {
 
 //! moment.js locale configuration
@@ -60408,7 +60448,7 @@ return cs;
 
 
 /***/ }),
-/* 233 */
+/* 234 */
 /***/ (function(module, exports, __webpack_require__) {
 
 //! moment.js locale configuration
@@ -60476,7 +60516,7 @@ return cv;
 
 
 /***/ }),
-/* 234 */
+/* 235 */
 /***/ (function(module, exports, __webpack_require__) {
 
 //! moment.js locale configuration
@@ -60562,7 +60602,7 @@ return cy;
 
 
 /***/ }),
-/* 235 */
+/* 236 */
 /***/ (function(module, exports, __webpack_require__) {
 
 //! moment.js locale configuration
@@ -60627,7 +60667,7 @@ return da;
 
 
 /***/ }),
-/* 236 */
+/* 237 */
 /***/ (function(module, exports, __webpack_require__) {
 
 //! moment.js locale configuration
@@ -60711,7 +60751,7 @@ return deAt;
 
 
 /***/ }),
-/* 237 */
+/* 238 */
 /***/ (function(module, exports, __webpack_require__) {
 
 //! moment.js locale configuration
@@ -60794,7 +60834,7 @@ return deCh;
 
 
 /***/ }),
-/* 238 */
+/* 239 */
 /***/ (function(module, exports, __webpack_require__) {
 
 //! moment.js locale configuration
@@ -60877,7 +60917,7 @@ return de;
 
 
 /***/ }),
-/* 239 */
+/* 240 */
 /***/ (function(module, exports, __webpack_require__) {
 
 //! moment.js locale configuration
@@ -60982,7 +61022,7 @@ return dv;
 
 
 /***/ }),
-/* 240 */
+/* 241 */
 /***/ (function(module, exports, __webpack_require__) {
 
 //! moment.js locale configuration
@@ -61087,7 +61127,7 @@ return el;
 
 
 /***/ }),
-/* 241 */
+/* 242 */
 /***/ (function(module, exports, __webpack_require__) {
 
 //! moment.js locale configuration
@@ -61159,7 +61199,7 @@ return enAu;
 
 
 /***/ }),
-/* 242 */
+/* 243 */
 /***/ (function(module, exports, __webpack_require__) {
 
 //! moment.js locale configuration
@@ -61227,7 +61267,7 @@ return enCa;
 
 
 /***/ }),
-/* 243 */
+/* 244 */
 /***/ (function(module, exports, __webpack_require__) {
 
 //! moment.js locale configuration
@@ -61299,7 +61339,7 @@ return enGb;
 
 
 /***/ }),
-/* 244 */
+/* 245 */
 /***/ (function(module, exports, __webpack_require__) {
 
 //! moment.js locale configuration
@@ -61371,7 +61411,7 @@ return enIe;
 
 
 /***/ }),
-/* 245 */
+/* 246 */
 /***/ (function(module, exports, __webpack_require__) {
 
 //! moment.js locale configuration
@@ -61443,7 +61483,7 @@ return enNz;
 
 
 /***/ }),
-/* 246 */
+/* 247 */
 /***/ (function(module, exports, __webpack_require__) {
 
 //! moment.js locale configuration
@@ -61521,7 +61561,7 @@ return eo;
 
 
 /***/ }),
-/* 247 */
+/* 248 */
 /***/ (function(module, exports, __webpack_require__) {
 
 //! moment.js locale configuration
@@ -61608,7 +61648,7 @@ return esDo;
 
 
 /***/ }),
-/* 248 */
+/* 249 */
 /***/ (function(module, exports, __webpack_require__) {
 
 //! moment.js locale configuration
@@ -61696,7 +61736,7 @@ return es;
 
 
 /***/ }),
-/* 249 */
+/* 250 */
 /***/ (function(module, exports, __webpack_require__) {
 
 //! moment.js locale configuration
@@ -61781,7 +61821,7 @@ return et;
 
 
 /***/ }),
-/* 250 */
+/* 251 */
 /***/ (function(module, exports, __webpack_require__) {
 
 //! moment.js locale configuration
@@ -61852,7 +61892,7 @@ return eu;
 
 
 /***/ }),
-/* 251 */
+/* 252 */
 /***/ (function(module, exports, __webpack_require__) {
 
 //! moment.js locale configuration
@@ -61964,7 +62004,7 @@ return fa;
 
 
 /***/ }),
-/* 252 */
+/* 253 */
 /***/ (function(module, exports, __webpack_require__) {
 
 //! moment.js locale configuration
@@ -62076,7 +62116,7 @@ return fi;
 
 
 /***/ }),
-/* 253 */
+/* 254 */
 /***/ (function(module, exports, __webpack_require__) {
 
 //! moment.js locale configuration
@@ -62141,7 +62181,7 @@ return fo;
 
 
 /***/ }),
-/* 254 */
+/* 255 */
 /***/ (function(module, exports, __webpack_require__) {
 
 //! moment.js locale configuration
@@ -62220,7 +62260,7 @@ return frCa;
 
 
 /***/ }),
-/* 255 */
+/* 256 */
 /***/ (function(module, exports, __webpack_require__) {
 
 //! moment.js locale configuration
@@ -62303,7 +62343,7 @@ return frCh;
 
 
 /***/ }),
-/* 256 */
+/* 257 */
 /***/ (function(module, exports, __webpack_require__) {
 
 //! moment.js locale configuration
@@ -62391,7 +62431,7 @@ return fr;
 
 
 /***/ }),
-/* 257 */
+/* 258 */
 /***/ (function(module, exports, __webpack_require__) {
 
 //! moment.js locale configuration
@@ -62471,7 +62511,7 @@ return fy;
 
 
 /***/ }),
-/* 258 */
+/* 259 */
 /***/ (function(module, exports, __webpack_require__) {
 
 //! moment.js locale configuration
@@ -62552,7 +62592,7 @@ return gd;
 
 
 /***/ }),
-/* 259 */
+/* 260 */
 /***/ (function(module, exports, __webpack_require__) {
 
 //! moment.js locale configuration
@@ -62634,7 +62674,7 @@ return gl;
 
 
 /***/ }),
-/* 260 */
+/* 261 */
 /***/ (function(module, exports, __webpack_require__) {
 
 //! moment.js locale configuration
@@ -62761,7 +62801,7 @@ return gomLatn;
 
 
 /***/ }),
-/* 261 */
+/* 262 */
 /***/ (function(module, exports, __webpack_require__) {
 
 //! moment.js locale configuration
@@ -62865,7 +62905,7 @@ return he;
 
 
 /***/ }),
-/* 262 */
+/* 263 */
 /***/ (function(module, exports, __webpack_require__) {
 
 //! moment.js locale configuration
@@ -62994,7 +63034,7 @@ return hi;
 
 
 /***/ }),
-/* 263 */
+/* 264 */
 /***/ (function(module, exports, __webpack_require__) {
 
 //! moment.js locale configuration
@@ -63144,7 +63184,7 @@ return hr;
 
 
 /***/ }),
-/* 264 */
+/* 265 */
 /***/ (function(module, exports, __webpack_require__) {
 
 //! moment.js locale configuration
@@ -63258,7 +63298,7 @@ return hu;
 
 
 /***/ }),
-/* 265 */
+/* 266 */
 /***/ (function(module, exports, __webpack_require__) {
 
 //! moment.js locale configuration
@@ -63358,7 +63398,7 @@ return hyAm;
 
 
 /***/ }),
-/* 266 */
+/* 267 */
 /***/ (function(module, exports, __webpack_require__) {
 
 //! moment.js locale configuration
@@ -63446,7 +63486,7 @@ return id;
 
 
 /***/ }),
-/* 267 */
+/* 268 */
 /***/ (function(module, exports, __webpack_require__) {
 
 //! moment.js locale configuration
@@ -63578,7 +63618,7 @@ return is;
 
 
 /***/ }),
-/* 268 */
+/* 269 */
 /***/ (function(module, exports, __webpack_require__) {
 
 //! moment.js locale configuration
@@ -63653,7 +63693,7 @@ return it;
 
 
 /***/ }),
-/* 269 */
+/* 270 */
 /***/ (function(module, exports, __webpack_require__) {
 
 //! moment.js locale configuration
@@ -63738,7 +63778,7 @@ return ja;
 
 
 /***/ }),
-/* 270 */
+/* 271 */
 /***/ (function(module, exports, __webpack_require__) {
 
 //! moment.js locale configuration
@@ -63826,7 +63866,7 @@ return jv;
 
 
 /***/ }),
-/* 271 */
+/* 272 */
 /***/ (function(module, exports, __webpack_require__) {
 
 //! moment.js locale configuration
@@ -63920,7 +63960,7 @@ return ka;
 
 
 /***/ }),
-/* 272 */
+/* 273 */
 /***/ (function(module, exports, __webpack_require__) {
 
 //! moment.js locale configuration
@@ -64012,7 +64052,7 @@ return kk;
 
 
 /***/ }),
-/* 273 */
+/* 274 */
 /***/ (function(module, exports, __webpack_require__) {
 
 //! moment.js locale configuration
@@ -64075,7 +64115,7 @@ return km;
 
 
 /***/ }),
-/* 274 */
+/* 275 */
 /***/ (function(module, exports, __webpack_require__) {
 
 //! moment.js locale configuration
@@ -64206,7 +64246,7 @@ return kn;
 
 
 /***/ }),
-/* 275 */
+/* 276 */
 /***/ (function(module, exports, __webpack_require__) {
 
 //! moment.js locale configuration
@@ -64280,7 +64320,7 @@ return ko;
 
 
 /***/ }),
-/* 276 */
+/* 277 */
 /***/ (function(module, exports, __webpack_require__) {
 
 //! moment.js locale configuration
@@ -64373,7 +64413,7 @@ return ky;
 
 
 /***/ }),
-/* 277 */
+/* 278 */
 /***/ (function(module, exports, __webpack_require__) {
 
 //! moment.js locale configuration
@@ -64515,7 +64555,7 @@ return lb;
 
 
 /***/ }),
-/* 278 */
+/* 279 */
 /***/ (function(module, exports, __webpack_require__) {
 
 //! moment.js locale configuration
@@ -64590,7 +64630,7 @@ return lo;
 
 
 /***/ }),
-/* 279 */
+/* 280 */
 /***/ (function(module, exports, __webpack_require__) {
 
 //! moment.js locale configuration
@@ -64712,7 +64752,7 @@ return lt;
 
 
 /***/ }),
-/* 280 */
+/* 281 */
 /***/ (function(module, exports, __webpack_require__) {
 
 //! moment.js locale configuration
@@ -64814,7 +64854,7 @@ return lv;
 
 
 /***/ }),
-/* 281 */
+/* 282 */
 /***/ (function(module, exports, __webpack_require__) {
 
 //! moment.js locale configuration
@@ -64930,7 +64970,7 @@ return me;
 
 
 /***/ }),
-/* 282 */
+/* 283 */
 /***/ (function(module, exports, __webpack_require__) {
 
 //! moment.js locale configuration
@@ -64999,7 +65039,7 @@ return mi;
 
 
 /***/ }),
-/* 283 */
+/* 284 */
 /***/ (function(module, exports, __webpack_require__) {
 
 //! moment.js locale configuration
@@ -65094,7 +65134,7 @@ return mk;
 
 
 /***/ }),
-/* 284 */
+/* 285 */
 /***/ (function(module, exports, __webpack_require__) {
 
 //! moment.js locale configuration
@@ -65180,7 +65220,7 @@ return ml;
 
 
 /***/ }),
-/* 285 */
+/* 286 */
 /***/ (function(module, exports, __webpack_require__) {
 
 //! moment.js locale configuration
@@ -65344,7 +65384,7 @@ return mr;
 
 
 /***/ }),
-/* 286 */
+/* 287 */
 /***/ (function(module, exports, __webpack_require__) {
 
 //! moment.js locale configuration
@@ -65432,7 +65472,7 @@ return msMy;
 
 
 /***/ }),
-/* 287 */
+/* 288 */
 /***/ (function(module, exports, __webpack_require__) {
 
 //! moment.js locale configuration
@@ -65519,7 +65559,7 @@ return ms;
 
 
 /***/ }),
-/* 288 */
+/* 289 */
 /***/ (function(module, exports, __webpack_require__) {
 
 //! moment.js locale configuration
@@ -65620,7 +65660,7 @@ return my;
 
 
 /***/ }),
-/* 289 */
+/* 290 */
 /***/ (function(module, exports, __webpack_require__) {
 
 //! moment.js locale configuration
@@ -65688,7 +65728,7 @@ return nb;
 
 
 /***/ }),
-/* 290 */
+/* 291 */
 /***/ (function(module, exports, __webpack_require__) {
 
 //! moment.js locale configuration
@@ -65816,7 +65856,7 @@ return ne;
 
 
 /***/ }),
-/* 291 */
+/* 292 */
 /***/ (function(module, exports, __webpack_require__) {
 
 //! moment.js locale configuration
@@ -65909,7 +65949,7 @@ return nlBe;
 
 
 /***/ }),
-/* 292 */
+/* 293 */
 /***/ (function(module, exports, __webpack_require__) {
 
 //! moment.js locale configuration
@@ -66002,7 +66042,7 @@ return nl;
 
 
 /***/ }),
-/* 293 */
+/* 294 */
 /***/ (function(module, exports, __webpack_require__) {
 
 //! moment.js locale configuration
@@ -66067,7 +66107,7 @@ return nn;
 
 
 /***/ }),
-/* 294 */
+/* 295 */
 /***/ (function(module, exports, __webpack_require__) {
 
 //! moment.js locale configuration
@@ -66196,7 +66236,7 @@ return paIn;
 
 
 /***/ }),
-/* 295 */
+/* 296 */
 /***/ (function(module, exports, __webpack_require__) {
 
 //! moment.js locale configuration
@@ -66308,7 +66348,7 @@ return pl;
 
 
 /***/ }),
-/* 296 */
+/* 297 */
 /***/ (function(module, exports, __webpack_require__) {
 
 //! moment.js locale configuration
@@ -66374,7 +66414,7 @@ return ptBr;
 
 
 /***/ }),
-/* 297 */
+/* 298 */
 /***/ (function(module, exports, __webpack_require__) {
 
 //! moment.js locale configuration
@@ -66444,7 +66484,7 @@ return pt;
 
 
 /***/ }),
-/* 298 */
+/* 299 */
 /***/ (function(module, exports, __webpack_require__) {
 
 //! moment.js locale configuration
@@ -66524,7 +66564,7 @@ return ro;
 
 
 /***/ }),
-/* 299 */
+/* 300 */
 /***/ (function(module, exports, __webpack_require__) {
 
 //! moment.js locale configuration
@@ -66712,7 +66752,7 @@ return ru;
 
 
 /***/ }),
-/* 300 */
+/* 301 */
 /***/ (function(module, exports, __webpack_require__) {
 
 //! moment.js locale configuration
@@ -66815,7 +66855,7 @@ return sd;
 
 
 /***/ }),
-/* 301 */
+/* 302 */
 /***/ (function(module, exports, __webpack_require__) {
 
 //! moment.js locale configuration
@@ -66881,7 +66921,7 @@ return se;
 
 
 /***/ }),
-/* 302 */
+/* 303 */
 /***/ (function(module, exports, __webpack_require__) {
 
 //! moment.js locale configuration
@@ -66957,7 +66997,7 @@ return si;
 
 
 /***/ }),
-/* 303 */
+/* 304 */
 /***/ (function(module, exports, __webpack_require__) {
 
 //! moment.js locale configuration
@@ -67112,7 +67152,7 @@ return sk;
 
 
 /***/ }),
-/* 304 */
+/* 305 */
 /***/ (function(module, exports, __webpack_require__) {
 
 //! moment.js locale configuration
@@ -67279,7 +67319,7 @@ return sl;
 
 
 /***/ }),
-/* 305 */
+/* 306 */
 /***/ (function(module, exports, __webpack_require__) {
 
 //! moment.js locale configuration
@@ -67354,7 +67394,7 @@ return sq;
 
 
 /***/ }),
-/* 306 */
+/* 307 */
 /***/ (function(module, exports, __webpack_require__) {
 
 //! moment.js locale configuration
@@ -67469,7 +67509,7 @@ return srCyrl;
 
 
 /***/ }),
-/* 307 */
+/* 308 */
 /***/ (function(module, exports, __webpack_require__) {
 
 //! moment.js locale configuration
@@ -67584,7 +67624,7 @@ return sr;
 
 
 /***/ }),
-/* 308 */
+/* 309 */
 /***/ (function(module, exports, __webpack_require__) {
 
 //! moment.js locale configuration
@@ -67678,7 +67718,7 @@ return ss;
 
 
 /***/ }),
-/* 309 */
+/* 310 */
 /***/ (function(module, exports, __webpack_require__) {
 
 //! moment.js locale configuration
@@ -67752,7 +67792,7 @@ return sv;
 
 
 /***/ }),
-/* 310 */
+/* 311 */
 /***/ (function(module, exports, __webpack_require__) {
 
 //! moment.js locale configuration
@@ -67816,7 +67856,7 @@ return sw;
 
 
 /***/ }),
-/* 311 */
+/* 312 */
 /***/ (function(module, exports, __webpack_require__) {
 
 //! moment.js locale configuration
@@ -67951,7 +67991,7 @@ return ta;
 
 
 /***/ }),
-/* 312 */
+/* 313 */
 /***/ (function(module, exports, __webpack_require__) {
 
 //! moment.js locale configuration
@@ -68045,7 +68085,7 @@ return te;
 
 
 /***/ }),
-/* 313 */
+/* 314 */
 /***/ (function(module, exports, __webpack_require__) {
 
 //! moment.js locale configuration
@@ -68118,7 +68158,7 @@ return tet;
 
 
 /***/ }),
-/* 314 */
+/* 315 */
 /***/ (function(module, exports, __webpack_require__) {
 
 //! moment.js locale configuration
@@ -68190,7 +68230,7 @@ return th;
 
 
 /***/ }),
-/* 315 */
+/* 316 */
 /***/ (function(module, exports, __webpack_require__) {
 
 //! moment.js locale configuration
@@ -68257,7 +68297,7 @@ return tlPh;
 
 
 /***/ }),
-/* 316 */
+/* 317 */
 /***/ (function(module, exports, __webpack_require__) {
 
 //! moment.js locale configuration
@@ -68382,7 +68422,7 @@ return tlh;
 
 
 /***/ }),
-/* 317 */
+/* 318 */
 /***/ (function(module, exports, __webpack_require__) {
 
 //! moment.js locale configuration
@@ -68477,7 +68517,7 @@ return tr;
 
 
 /***/ }),
-/* 318 */
+/* 319 */
 /***/ (function(module, exports, __webpack_require__) {
 
 //! moment.js locale configuration
@@ -68573,7 +68613,7 @@ return tzl;
 
 
 /***/ }),
-/* 319 */
+/* 320 */
 /***/ (function(module, exports, __webpack_require__) {
 
 //! moment.js locale configuration
@@ -68636,7 +68676,7 @@ return tzmLatn;
 
 
 /***/ }),
-/* 320 */
+/* 321 */
 /***/ (function(module, exports, __webpack_require__) {
 
 //! moment.js locale configuration
@@ -68699,7 +68739,7 @@ return tzm;
 
 
 /***/ }),
-/* 321 */
+/* 322 */
 /***/ (function(module, exports, __webpack_require__) {
 
 //! moment.js locale configuration
@@ -68855,7 +68895,7 @@ return uk;
 
 
 /***/ }),
-/* 322 */
+/* 323 */
 /***/ (function(module, exports, __webpack_require__) {
 
 //! moment.js locale configuration
@@ -68959,7 +68999,7 @@ return ur;
 
 
 /***/ }),
-/* 323 */
+/* 324 */
 /***/ (function(module, exports, __webpack_require__) {
 
 //! moment.js locale configuration
@@ -69022,7 +69062,7 @@ return uzLatn;
 
 
 /***/ }),
-/* 324 */
+/* 325 */
 /***/ (function(module, exports, __webpack_require__) {
 
 //! moment.js locale configuration
@@ -69085,7 +69125,7 @@ return uz;
 
 
 /***/ }),
-/* 325 */
+/* 326 */
 /***/ (function(module, exports, __webpack_require__) {
 
 //! moment.js locale configuration
@@ -69169,7 +69209,7 @@ return vi;
 
 
 /***/ }),
-/* 326 */
+/* 327 */
 /***/ (function(module, exports, __webpack_require__) {
 
 //! moment.js locale configuration
@@ -69242,7 +69282,7 @@ return xPseudo;
 
 
 /***/ }),
-/* 327 */
+/* 328 */
 /***/ (function(module, exports, __webpack_require__) {
 
 //! moment.js locale configuration
@@ -69307,7 +69347,7 @@ return yo;
 
 
 /***/ }),
-/* 328 */
+/* 329 */
 /***/ (function(module, exports, __webpack_require__) {
 
 //! moment.js locale configuration
@@ -69423,7 +69463,7 @@ return zhCn;
 
 
 /***/ }),
-/* 329 */
+/* 330 */
 /***/ (function(module, exports, __webpack_require__) {
 
 //! moment.js locale configuration
@@ -69533,7 +69573,7 @@ return zhHk;
 
 
 /***/ }),
-/* 330 */
+/* 331 */
 /***/ (function(module, exports, __webpack_require__) {
 
 //! moment.js locale configuration
@@ -69639,46 +69679,6 @@ var zhTw = moment.defineLocale('zh-tw', {
 return zhTw;
 
 })));
-
-
-/***/ }),
-/* 331 */
-/***/ (function(module, exports, __webpack_require__) {
-
-
-/**
- * fetch-error.js
- *
- * FetchError interface for operational errors
- */
-
-module.exports = FetchError;
-
-/**
- * Create FetchError instance
- *
- * @param   String      message      Error message for human
- * @param   String      type         Error type for machine
- * @param   String      systemError  For Node.js system error
- * @return  FetchError
- */
-function FetchError(message, type, systemError) {
-
-	// hide custom error implementation details from end-users
-	Error.captureStackTrace(this, this.constructor);
-
-	this.name = this.constructor.name;
-	this.message = message;
-	this.type = type;
-
-	// when err.type is `system`, err.code contains system error code
-	if (systemError) {
-		this.code = this.errno = systemError.code;
-	}
-
-}
-
-__webpack_require__(2).inherits(FetchError, Error);
 
 
 /***/ }),
@@ -72175,7 +72175,7 @@ function DiffieHellman(key) {
 
 	} else if (key.type === 'curve25519') {
 		if (ed === undefined)
-			ed = __webpack_require__(134);
+			ed = __webpack_require__(136);
 
 		if (this._isPriv) {
 			this._priv = key.part.r.data;
@@ -74177,7 +74177,7 @@ var compileSchema = __webpack_require__(364)
   , resolve = __webpack_require__(151)
   , Cache = __webpack_require__(360)
   , SchemaObject = __webpack_require__(152)
-  , stableStringify = __webpack_require__(136)
+  , stableStringify = __webpack_require__(138)
   , formats = __webpack_require__(363)
   , rules = __webpack_require__(365)
   , v5 = __webpack_require__(389)
@@ -74853,7 +74853,7 @@ function compareDateTime(dt1, dt2) {
 
 var resolve = __webpack_require__(151)
   , util = __webpack_require__(37)
-  , stableStringify = __webpack_require__(136)
+  , stableStringify = __webpack_require__(138)
   , async = __webpack_require__(149);
 
 var beautify;
@@ -80243,8 +80243,8 @@ var $ = __webpack_require__(105),
     dataAttrPrefix = 'data-',
     _ = {
       forEach: __webpack_require__(93),
-      extend: __webpack_require__(212),
-      some: __webpack_require__(617)
+      extend: __webpack_require__(213),
+      some: __webpack_require__(620)
     },
 
   // Lookup table for coercing string data-* attributes to their corresponding
@@ -80735,7 +80735,7 @@ exports.is = function (selector) {
 
 var domEach = __webpack_require__(58).domEach,
     _ = {
-      pick: __webpack_require__(614),
+      pick: __webpack_require__(617),
     };
 
 var toString = Object.prototype.toString;
@@ -80866,7 +80866,7 @@ var submittableSelector = 'input,select,textarea,keygen',
     r20 = /%20/g,
     rCRLF = /\r?\n/g,
     _ = {
-      map: __webpack_require__(612)
+      map: __webpack_require__(615)
     };
 
 exports.serialize = function() {
@@ -80941,8 +80941,8 @@ var parse = __webpack_require__(78),
     isHtml = utils.isHtml,
     slice = Array.prototype.slice,
     _ = {
-      flatten: __webpack_require__(611),
-      bind: __webpack_require__(137),
+      flatten: __webpack_require__(614),
+      bind: __webpack_require__(139),
       forEach: __webpack_require__(93)
     };
 
@@ -81368,11 +81368,11 @@ var select = __webpack_require__(197),
     uniqueSort = __webpack_require__(54).DomUtils.uniqueSort,
     isTag = utils.isTag,
     _ = {
-      bind: __webpack_require__(137),
+      bind: __webpack_require__(139),
       forEach: __webpack_require__(93),
-      reject: __webpack_require__(616),
-      filter: __webpack_require__(610),
-      reduce: __webpack_require__(615)
+      reject: __webpack_require__(619),
+      filter: __webpack_require__(613),
+      reduce: __webpack_require__(618)
     };
 
 exports.find = function(selectorOrHaystack) {
@@ -87851,7 +87851,7 @@ $export($export.G + $export.B + $export.F * MSIE, {
 "use strict";
 
 
-const _ = __webpack_require__(214)
+const _ = __webpack_require__(215)
 const slugify = __webpack_require__(517)
 const fetcher = __webpack_require__(191)
 const cozy = __webpack_require__(41)
@@ -88358,7 +88358,7 @@ module.exports = {
 /* 514 */
 /***/ (function(module, exports, __webpack_require__) {
 
-const _ = __webpack_require__(214)
+const _ = __webpack_require__(215)
 
 const cozyClient = __webpack_require__(41)
 
@@ -91645,7 +91645,7 @@ var http = __webpack_require__(36);
 var https = __webpack_require__(75);
 var parseUrl = __webpack_require__(17).parse;
 var fs = __webpack_require__(74);
-var mime = __webpack_require__(215);
+var mime = __webpack_require__(216);
 var asynckit = __webpack_require__(393);
 var populate = __webpack_require__(544);
 
@@ -94687,7 +94687,7 @@ var crypto = __webpack_require__(3);
 var http = __webpack_require__(36);
 var util = __webpack_require__(2);
 var sshpk = __webpack_require__(143);
-var jsprim = __webpack_require__(609);
+var jsprim = __webpack_require__(612);
 var utils = __webpack_require__(89);
 
 var sprintf = __webpack_require__(2).format;
@@ -102715,7 +102715,7 @@ module.exports = Array.isArray || function (arr) {
 "use strict";
 
 
-var realFetch = __webpack_require__(622);
+var realFetch = __webpack_require__(602);
 module.exports = function(url, options) {
 	if (/^\/\//.test(url)) {
 		url = 'https:' + url;
@@ -102733,6 +102733,420 @@ if (!global.fetch) {
 
 /***/ }),
 /* 602 */
+/***/ (function(module, exports, __webpack_require__) {
+
+
+/**
+ * index.js
+ *
+ * a request API compatible with window.fetch
+ */
+
+var parse_url = __webpack_require__(17).parse;
+var resolve_url = __webpack_require__(17).resolve;
+var http = __webpack_require__(36);
+var https = __webpack_require__(75);
+var zlib = __webpack_require__(356);
+var stream = __webpack_require__(11);
+
+var Body = __webpack_require__(134);
+var Response = __webpack_require__(604);
+var Headers = __webpack_require__(135);
+var Request = __webpack_require__(603);
+var FetchError = __webpack_require__(211);
+
+// commonjs
+module.exports = Fetch;
+// es6 default export compatibility
+module.exports.default = module.exports;
+
+/**
+ * Fetch class
+ *
+ * @param   Mixed    url   Absolute url or Request instance
+ * @param   Object   opts  Fetch options
+ * @return  Promise
+ */
+function Fetch(url, opts) {
+
+	// allow call as function
+	if (!(this instanceof Fetch))
+		return new Fetch(url, opts);
+
+	// allow custom promise
+	if (!Fetch.Promise) {
+		throw new Error('native promise missing, set Fetch.Promise to your favorite alternative');
+	}
+
+	Body.Promise = Fetch.Promise;
+
+	var self = this;
+
+	// wrap http.request into fetch
+	return new Fetch.Promise(function(resolve, reject) {
+		// build request object
+		var options = new Request(url, opts);
+
+		if (!options.protocol || !options.hostname) {
+			throw new Error('only absolute urls are supported');
+		}
+
+		if (options.protocol !== 'http:' && options.protocol !== 'https:') {
+			throw new Error('only http(s) protocols are supported');
+		}
+
+		var send;
+		if (options.protocol === 'https:') {
+			send = https.request;
+		} else {
+			send = http.request;
+		}
+
+		// normalize headers
+		var headers = new Headers(options.headers);
+
+		if (options.compress) {
+			headers.set('accept-encoding', 'gzip,deflate');
+		}
+
+		if (!headers.has('user-agent')) {
+			headers.set('user-agent', 'node-fetch/1.0 (+https://github.com/bitinn/node-fetch)');
+		}
+
+		if (!headers.has('connection') && !options.agent) {
+			headers.set('connection', 'close');
+		}
+
+		if (!headers.has('accept')) {
+			headers.set('accept', '*/*');
+		}
+
+		// detect form data input from form-data module, this hack avoid the need to pass multipart header manually
+		if (!headers.has('content-type') && options.body && typeof options.body.getBoundary === 'function') {
+			headers.set('content-type', 'multipart/form-data; boundary=' + options.body.getBoundary());
+		}
+
+		// bring node-fetch closer to browser behavior by setting content-length automatically
+		if (!headers.has('content-length') && /post|put|patch|delete/i.test(options.method)) {
+			if (typeof options.body === 'string') {
+				headers.set('content-length', Buffer.byteLength(options.body));
+			// detect form data input from form-data module, this hack avoid the need to add content-length header manually
+			} else if (options.body && typeof options.body.getLengthSync === 'function') {
+				// for form-data 1.x
+				if (options.body._lengthRetrievers && options.body._lengthRetrievers.length == 0) {
+					headers.set('content-length', options.body.getLengthSync().toString());
+				// for form-data 2.x
+				} else if (options.body.hasKnownLength && options.body.hasKnownLength()) {
+					headers.set('content-length', options.body.getLengthSync().toString());
+				}
+			// this is only necessary for older nodejs releases (before iojs merge)
+			} else if (options.body === undefined || options.body === null) {
+				headers.set('content-length', '0');
+			}
+		}
+
+		options.headers = headers.raw();
+
+		// http.request only support string as host header, this hack make custom host header possible
+		if (options.headers.host) {
+			options.headers.host = options.headers.host[0];
+		}
+
+		// send request
+		var req = send(options);
+		var reqTimeout;
+
+		if (options.timeout) {
+			req.once('socket', function(socket) {
+				reqTimeout = setTimeout(function() {
+					req.abort();
+					reject(new FetchError('network timeout at: ' + options.url, 'request-timeout'));
+				}, options.timeout);
+			});
+		}
+
+		req.on('error', function(err) {
+			clearTimeout(reqTimeout);
+			reject(new FetchError('request to ' + options.url + ' failed, reason: ' + err.message, 'system', err));
+		});
+
+		req.on('response', function(res) {
+			clearTimeout(reqTimeout);
+
+			// handle redirect
+			if (self.isRedirect(res.statusCode) && options.redirect !== 'manual') {
+				if (options.redirect === 'error') {
+					reject(new FetchError('redirect mode is set to error: ' + options.url, 'no-redirect'));
+					return;
+				}
+
+				if (options.counter >= options.follow) {
+					reject(new FetchError('maximum redirect reached at: ' + options.url, 'max-redirect'));
+					return;
+				}
+
+				if (!res.headers.location) {
+					reject(new FetchError('redirect location header missing at: ' + options.url, 'invalid-redirect'));
+					return;
+				}
+
+				// per fetch spec, for POST request with 301/302 response, or any request with 303 response, use GET when following redirect
+				if (res.statusCode === 303
+					|| ((res.statusCode === 301 || res.statusCode === 302) && options.method === 'POST'))
+				{
+					options.method = 'GET';
+					delete options.body;
+					delete options.headers['content-length'];
+				}
+
+				options.counter++;
+
+				resolve(Fetch(resolve_url(options.url, res.headers.location), options));
+				return;
+			}
+
+			// normalize location header for manual redirect mode
+			var headers = new Headers(res.headers);
+			if (options.redirect === 'manual' && headers.has('location')) {
+				headers.set('location', resolve_url(options.url, headers.get('location')));
+			}
+
+			// prepare response
+			var body = res.pipe(new stream.PassThrough());
+			var response_options = {
+				url: options.url
+				, status: res.statusCode
+				, statusText: res.statusMessage
+				, headers: headers
+				, size: options.size
+				, timeout: options.timeout
+			};
+
+			// response object
+			var output;
+
+			// in following scenarios we ignore compression support
+			// 1. compression support is disabled
+			// 2. HEAD request
+			// 3. no content-encoding header
+			// 4. no content response (204)
+			// 5. content not modified response (304)
+			if (!options.compress || options.method === 'HEAD' || !headers.has('content-encoding') || res.statusCode === 204 || res.statusCode === 304) {
+				output = new Response(body, response_options);
+				resolve(output);
+				return;
+			}
+
+			// otherwise, check for gzip or deflate
+			var name = headers.get('content-encoding');
+
+			// for gzip
+			if (name == 'gzip' || name == 'x-gzip') {
+				body = body.pipe(zlib.createGunzip());
+				output = new Response(body, response_options);
+				resolve(output);
+				return;
+
+			// for deflate
+			} else if (name == 'deflate' || name == 'x-deflate') {
+				// handle the infamous raw deflate response from old servers
+				// a hack for old IIS and Apache servers
+				var raw = res.pipe(new stream.PassThrough());
+				raw.once('data', function(chunk) {
+					// see http://stackoverflow.com/questions/37519828
+					if ((chunk[0] & 0x0F) === 0x08) {
+						body = body.pipe(zlib.createInflate());
+					} else {
+						body = body.pipe(zlib.createInflateRaw());
+					}
+					output = new Response(body, response_options);
+					resolve(output);
+				});
+				return;
+			}
+
+			// otherwise, use response as-is
+			output = new Response(body, response_options);
+			resolve(output);
+			return;
+		});
+
+		// accept string, buffer or readable stream as body
+		// per spec we will call tostring on non-stream objects
+		if (typeof options.body === 'string') {
+			req.write(options.body);
+			req.end();
+		} else if (options.body instanceof Buffer) {
+			req.write(options.body);
+			req.end()
+		} else if (typeof options.body === 'object' && options.body.pipe) {
+			options.body.pipe(req);
+		} else if (typeof options.body === 'object') {
+			req.write(options.body.toString());
+			req.end();
+		} else {
+			req.end();
+		}
+	});
+
+};
+
+/**
+ * Redirect code matching
+ *
+ * @param   Number   code  Status code
+ * @return  Boolean
+ */
+Fetch.prototype.isRedirect = function(code) {
+	return code === 301 || code === 302 || code === 303 || code === 307 || code === 308;
+}
+
+// expose Promise
+Fetch.Promise = global.Promise;
+Fetch.Response = Response;
+Fetch.Headers = Headers;
+Fetch.Request = Request;
+
+
+/***/ }),
+/* 603 */
+/***/ (function(module, exports, __webpack_require__) {
+
+
+/**
+ * request.js
+ *
+ * Request class contains server only options
+ */
+
+var parse_url = __webpack_require__(17).parse;
+var Headers = __webpack_require__(135);
+var Body = __webpack_require__(134);
+
+module.exports = Request;
+
+/**
+ * Request class
+ *
+ * @param   Mixed   input  Url or Request instance
+ * @param   Object  init   Custom options
+ * @return  Void
+ */
+function Request(input, init) {
+	var url, url_parsed;
+
+	// normalize input
+	if (!(input instanceof Request)) {
+		url = input;
+		url_parsed = parse_url(url);
+		input = {};
+	} else {
+		url = input.url;
+		url_parsed = parse_url(url);
+	}
+
+	// normalize init
+	init = init || {};
+
+	// fetch spec options
+	this.method = init.method || input.method || 'GET';
+	this.redirect = init.redirect || input.redirect || 'follow';
+	this.headers = new Headers(init.headers || input.headers || {});
+	this.url = url;
+
+	// server only options
+	this.follow = init.follow !== undefined ?
+		init.follow : input.follow !== undefined ?
+		input.follow : 20;
+	this.compress = init.compress !== undefined ?
+		init.compress : input.compress !== undefined ?
+		input.compress : true;
+	this.counter = init.counter || input.counter || 0;
+	this.agent = init.agent || input.agent;
+
+	Body.call(this, init.body || this._clone(input), {
+		timeout: init.timeout || input.timeout || 0,
+		size: init.size || input.size || 0
+	});
+
+	// server request options
+	this.protocol = url_parsed.protocol;
+	this.hostname = url_parsed.hostname;
+	this.port = url_parsed.port;
+	this.path = url_parsed.path;
+	this.auth = url_parsed.auth;
+}
+
+Request.prototype = Object.create(Body.prototype);
+
+/**
+ * Clone this request
+ *
+ * @return  Request
+ */
+Request.prototype.clone = function() {
+	return new Request(this);
+};
+
+
+/***/ }),
+/* 604 */
+/***/ (function(module, exports, __webpack_require__) {
+
+
+/**
+ * response.js
+ *
+ * Response class provides content decoding
+ */
+
+var http = __webpack_require__(36);
+var Headers = __webpack_require__(135);
+var Body = __webpack_require__(134);
+
+module.exports = Response;
+
+/**
+ * Response class
+ *
+ * @param   Stream  body  Readable stream
+ * @param   Object  opts  Response options
+ * @return  Void
+ */
+function Response(body, opts) {
+
+	opts = opts || {};
+
+	this.url = opts.url;
+	this.status = opts.status || 200;
+	this.statusText = opts.statusText || http.STATUS_CODES[this.status];
+	this.headers = new Headers(opts.headers);
+	this.ok = this.status >= 200 && this.status < 300;
+
+	Body.call(this, body, opts);
+
+}
+
+Response.prototype = Object.create(Body.prototype);
+
+/**
+ * Clone this response
+ *
+ * @return  Response
+ */
+Response.prototype.clone = function() {
+	return new Response(this._clone(this), {
+		url: this.url
+		, status: this.status
+		, statusText: this.statusText
+		, headers: this.headers
+		, ok: this.ok
+	});
+};
+
+
+/***/ }),
+/* 605 */
 /***/ (function(module, exports, __webpack_require__) {
 
 "use strict";
@@ -102753,7 +103167,7 @@ if (!global.fetch) {
 
 var core = __webpack_require__(91);
 var utils = __webpack_require__(92);
-var curve255 = __webpack_require__(135);
+var curve255 = __webpack_require__(137);
 
 
     /**
@@ -102850,7 +103264,7 @@ module.exports = ns;
 
 
 /***/ }),
-/* 603 */
+/* 606 */
 /***/ (function(module, exports, __webpack_require__) {
 
 "use strict";
@@ -102871,7 +103285,7 @@ module.exports = ns;
  */
 
 var core = __webpack_require__(91);
-var curve255 = __webpack_require__(135);
+var curve255 = __webpack_require__(137);
 var utils = __webpack_require__(92);
 var BigInteger = __webpack_require__(34).BigInteger;
 var crypto = __webpack_require__(3);
@@ -103430,7 +103844,7 @@ module.exports = ns;
 
 
 /***/ }),
-/* 604 */
+/* 607 */
 /***/ (function(module, exports, __webpack_require__) {
 
 var __WEBPACK_AMD_DEFINE_ARRAY__, __WEBPACK_AMD_DEFINE_RESULT__;/**
@@ -103710,7 +104124,7 @@ return exports;
 
 
 /***/ }),
-/* 605 */
+/* 608 */
 /***/ (function(module, exports) {
 
 exports = module.exports = stringify
@@ -103743,15 +104157,15 @@ function serializer(replacer, cycleReplacer) {
 
 
 /***/ }),
-/* 606 */
+/* 609 */
 /***/ (function(module, exports, __webpack_require__) {
 
-exports.parse = __webpack_require__(607);
-exports.stringify = __webpack_require__(608);
+exports.parse = __webpack_require__(610);
+exports.stringify = __webpack_require__(611);
 
 
 /***/ }),
-/* 607 */
+/* 610 */
 /***/ (function(module, exports) {
 
 var at, // The index of the current character
@@ -104030,7 +104444,7 @@ module.exports = function (source, reviver) {
 
 
 /***/ }),
-/* 608 */
+/* 611 */
 /***/ (function(module, exports) {
 
 var cx = /[\u0000\u00ad\u0600-\u0604\u070f\u17b4\u17b5\u200c-\u200f\u2028-\u202f\u2060-\u206f\ufeff\ufff0-\uffff]/g,
@@ -104190,7 +104604,7 @@ module.exports = function (value, replacer, space) {
 
 
 /***/ }),
-/* 609 */
+/* 612 */
 /***/ (function(module, exports, __webpack_require__) {
 
 /*
@@ -104202,7 +104616,7 @@ var mod_util = __webpack_require__(2);
 
 var mod_extsprintf = __webpack_require__(205);
 var mod_verror = __webpack_require__(656);
-var mod_jsonschema = __webpack_require__(604);
+var mod_jsonschema = __webpack_require__(607);
 
 /*
  * Public interface
@@ -104931,7 +105345,7 @@ function mergeObjects(provided, overrides, defaults)
 
 
 /***/ }),
-/* 610 */
+/* 613 */
 /***/ (function(module, exports, __webpack_require__) {
 
 /* WEBPACK VAR INJECTION */(function(module) {/**
@@ -107304,7 +107718,7 @@ module.exports = filter;
 /* WEBPACK VAR INJECTION */}.call(exports, __webpack_require__(28)(module)))
 
 /***/ }),
-/* 611 */
+/* 614 */
 /***/ (function(module, exports) {
 
 /**
@@ -107659,7 +108073,7 @@ module.exports = flatten;
 
 
 /***/ }),
-/* 612 */
+/* 615 */
 /***/ (function(module, exports, __webpack_require__) {
 
 /* WEBPACK VAR INJECTION */(function(module) {/**
@@ -110032,7 +110446,7 @@ module.exports = map;
 /* WEBPACK VAR INJECTION */}.call(exports, __webpack_require__(28)(module)))
 
 /***/ }),
-/* 613 */
+/* 616 */
 /***/ (function(module, exports, __webpack_require__) {
 
 /* WEBPACK VAR INJECTION */(function(module) {/**
@@ -112246,7 +112660,7 @@ module.exports = merge;
 /* WEBPACK VAR INJECTION */}.call(exports, __webpack_require__(28)(module)))
 
 /***/ }),
-/* 614 */
+/* 617 */
 /***/ (function(module, exports) {
 
 /**
@@ -112755,7 +113169,7 @@ module.exports = pick;
 
 
 /***/ }),
-/* 615 */
+/* 618 */
 /***/ (function(module, exports, __webpack_require__) {
 
 /* WEBPACK VAR INJECTION */(function(module) {/**
@@ -115134,7 +115548,7 @@ module.exports = reduce;
 /* WEBPACK VAR INJECTION */}.call(exports, __webpack_require__(28)(module)))
 
 /***/ }),
-/* 616 */
+/* 619 */
 /***/ (function(module, exports, __webpack_require__) {
 
 /* WEBPACK VAR INJECTION */(function(module) {/**
@@ -117539,7 +117953,7 @@ module.exports = reject;
 /* WEBPACK VAR INJECTION */}.call(exports, __webpack_require__(28)(module)))
 
 /***/ }),
-/* 617 */
+/* 620 */
 /***/ (function(module, exports, __webpack_require__) {
 
 /* WEBPACK VAR INJECTION */(function(module) {/**
@@ -119914,7 +120328,7 @@ module.exports = some;
 /* WEBPACK VAR INJECTION */}.call(exports, __webpack_require__(28)(module)))
 
 /***/ }),
-/* 618 */
+/* 621 */
 /***/ (function(module, exports) {
 
 module.exports = {
@@ -128615,7 +129029,7 @@ module.exports = {
 };
 
 /***/ }),
-/* 619 */
+/* 622 */
 /***/ (function(module, exports, __webpack_require__) {
 
 /*!
@@ -128628,244 +129042,244 @@ module.exports = {
  * Module exports.
  */
 
-module.exports = __webpack_require__(618)
+module.exports = __webpack_require__(621)
 
 
 /***/ }),
-/* 620 */
+/* 623 */
 /***/ (function(module, exports, __webpack_require__) {
 
 var map = {
-	"./af": 216,
-	"./af.js": 216,
-	"./ar": 223,
-	"./ar-dz": 217,
-	"./ar-dz.js": 217,
-	"./ar-kw": 218,
-	"./ar-kw.js": 218,
-	"./ar-ly": 219,
-	"./ar-ly.js": 219,
-	"./ar-ma": 220,
-	"./ar-ma.js": 220,
-	"./ar-sa": 221,
-	"./ar-sa.js": 221,
-	"./ar-tn": 222,
-	"./ar-tn.js": 222,
-	"./ar.js": 223,
-	"./az": 224,
-	"./az.js": 224,
-	"./be": 225,
-	"./be.js": 225,
-	"./bg": 226,
-	"./bg.js": 226,
-	"./bn": 227,
-	"./bn.js": 227,
-	"./bo": 228,
-	"./bo.js": 228,
-	"./br": 229,
-	"./br.js": 229,
-	"./bs": 230,
-	"./bs.js": 230,
-	"./ca": 231,
-	"./ca.js": 231,
-	"./cs": 232,
-	"./cs.js": 232,
-	"./cv": 233,
-	"./cv.js": 233,
-	"./cy": 234,
-	"./cy.js": 234,
-	"./da": 235,
-	"./da.js": 235,
-	"./de": 238,
-	"./de-at": 236,
-	"./de-at.js": 236,
-	"./de-ch": 237,
-	"./de-ch.js": 237,
-	"./de.js": 238,
-	"./dv": 239,
-	"./dv.js": 239,
-	"./el": 240,
-	"./el.js": 240,
-	"./en-au": 241,
-	"./en-au.js": 241,
-	"./en-ca": 242,
-	"./en-ca.js": 242,
-	"./en-gb": 243,
-	"./en-gb.js": 243,
-	"./en-ie": 244,
-	"./en-ie.js": 244,
-	"./en-nz": 245,
-	"./en-nz.js": 245,
-	"./eo": 246,
-	"./eo.js": 246,
-	"./es": 248,
-	"./es-do": 247,
-	"./es-do.js": 247,
-	"./es.js": 248,
-	"./et": 249,
-	"./et.js": 249,
-	"./eu": 250,
-	"./eu.js": 250,
-	"./fa": 251,
-	"./fa.js": 251,
-	"./fi": 252,
-	"./fi.js": 252,
-	"./fo": 253,
-	"./fo.js": 253,
-	"./fr": 256,
-	"./fr-ca": 254,
-	"./fr-ca.js": 254,
-	"./fr-ch": 255,
-	"./fr-ch.js": 255,
-	"./fr.js": 256,
-	"./fy": 257,
-	"./fy.js": 257,
-	"./gd": 258,
-	"./gd.js": 258,
-	"./gl": 259,
-	"./gl.js": 259,
-	"./gom-latn": 260,
-	"./gom-latn.js": 260,
-	"./he": 261,
-	"./he.js": 261,
-	"./hi": 262,
-	"./hi.js": 262,
-	"./hr": 263,
-	"./hr.js": 263,
-	"./hu": 264,
-	"./hu.js": 264,
-	"./hy-am": 265,
-	"./hy-am.js": 265,
-	"./id": 266,
-	"./id.js": 266,
-	"./is": 267,
-	"./is.js": 267,
-	"./it": 268,
-	"./it.js": 268,
-	"./ja": 269,
-	"./ja.js": 269,
-	"./jv": 270,
-	"./jv.js": 270,
-	"./ka": 271,
-	"./ka.js": 271,
-	"./kk": 272,
-	"./kk.js": 272,
-	"./km": 273,
-	"./km.js": 273,
-	"./kn": 274,
-	"./kn.js": 274,
-	"./ko": 275,
-	"./ko.js": 275,
-	"./ky": 276,
-	"./ky.js": 276,
-	"./lb": 277,
-	"./lb.js": 277,
-	"./lo": 278,
-	"./lo.js": 278,
-	"./lt": 279,
-	"./lt.js": 279,
-	"./lv": 280,
-	"./lv.js": 280,
-	"./me": 281,
-	"./me.js": 281,
-	"./mi": 282,
-	"./mi.js": 282,
-	"./mk": 283,
-	"./mk.js": 283,
-	"./ml": 284,
-	"./ml.js": 284,
-	"./mr": 285,
-	"./mr.js": 285,
-	"./ms": 287,
-	"./ms-my": 286,
-	"./ms-my.js": 286,
-	"./ms.js": 287,
-	"./my": 288,
-	"./my.js": 288,
-	"./nb": 289,
-	"./nb.js": 289,
-	"./ne": 290,
-	"./ne.js": 290,
-	"./nl": 292,
-	"./nl-be": 291,
-	"./nl-be.js": 291,
-	"./nl.js": 292,
-	"./nn": 293,
-	"./nn.js": 293,
-	"./pa-in": 294,
-	"./pa-in.js": 294,
-	"./pl": 295,
-	"./pl.js": 295,
-	"./pt": 297,
-	"./pt-br": 296,
-	"./pt-br.js": 296,
-	"./pt.js": 297,
-	"./ro": 298,
-	"./ro.js": 298,
-	"./ru": 299,
-	"./ru.js": 299,
-	"./sd": 300,
-	"./sd.js": 300,
-	"./se": 301,
-	"./se.js": 301,
-	"./si": 302,
-	"./si.js": 302,
-	"./sk": 303,
-	"./sk.js": 303,
-	"./sl": 304,
-	"./sl.js": 304,
-	"./sq": 305,
-	"./sq.js": 305,
-	"./sr": 307,
-	"./sr-cyrl": 306,
-	"./sr-cyrl.js": 306,
-	"./sr.js": 307,
-	"./ss": 308,
-	"./ss.js": 308,
-	"./sv": 309,
-	"./sv.js": 309,
-	"./sw": 310,
-	"./sw.js": 310,
-	"./ta": 311,
-	"./ta.js": 311,
-	"./te": 312,
-	"./te.js": 312,
-	"./tet": 313,
-	"./tet.js": 313,
-	"./th": 314,
-	"./th.js": 314,
-	"./tl-ph": 315,
-	"./tl-ph.js": 315,
-	"./tlh": 316,
-	"./tlh.js": 316,
-	"./tr": 317,
-	"./tr.js": 317,
-	"./tzl": 318,
-	"./tzl.js": 318,
-	"./tzm": 320,
-	"./tzm-latn": 319,
-	"./tzm-latn.js": 319,
-	"./tzm.js": 320,
-	"./uk": 321,
-	"./uk.js": 321,
-	"./ur": 322,
-	"./ur.js": 322,
-	"./uz": 324,
-	"./uz-latn": 323,
-	"./uz-latn.js": 323,
-	"./uz.js": 324,
-	"./vi": 325,
-	"./vi.js": 325,
-	"./x-pseudo": 326,
-	"./x-pseudo.js": 326,
-	"./yo": 327,
-	"./yo.js": 327,
-	"./zh-cn": 328,
-	"./zh-cn.js": 328,
-	"./zh-hk": 329,
-	"./zh-hk.js": 329,
-	"./zh-tw": 330,
-	"./zh-tw.js": 330
+	"./af": 217,
+	"./af.js": 217,
+	"./ar": 224,
+	"./ar-dz": 218,
+	"./ar-dz.js": 218,
+	"./ar-kw": 219,
+	"./ar-kw.js": 219,
+	"./ar-ly": 220,
+	"./ar-ly.js": 220,
+	"./ar-ma": 221,
+	"./ar-ma.js": 221,
+	"./ar-sa": 222,
+	"./ar-sa.js": 222,
+	"./ar-tn": 223,
+	"./ar-tn.js": 223,
+	"./ar.js": 224,
+	"./az": 225,
+	"./az.js": 225,
+	"./be": 226,
+	"./be.js": 226,
+	"./bg": 227,
+	"./bg.js": 227,
+	"./bn": 228,
+	"./bn.js": 228,
+	"./bo": 229,
+	"./bo.js": 229,
+	"./br": 230,
+	"./br.js": 230,
+	"./bs": 231,
+	"./bs.js": 231,
+	"./ca": 232,
+	"./ca.js": 232,
+	"./cs": 233,
+	"./cs.js": 233,
+	"./cv": 234,
+	"./cv.js": 234,
+	"./cy": 235,
+	"./cy.js": 235,
+	"./da": 236,
+	"./da.js": 236,
+	"./de": 239,
+	"./de-at": 237,
+	"./de-at.js": 237,
+	"./de-ch": 238,
+	"./de-ch.js": 238,
+	"./de.js": 239,
+	"./dv": 240,
+	"./dv.js": 240,
+	"./el": 241,
+	"./el.js": 241,
+	"./en-au": 242,
+	"./en-au.js": 242,
+	"./en-ca": 243,
+	"./en-ca.js": 243,
+	"./en-gb": 244,
+	"./en-gb.js": 244,
+	"./en-ie": 245,
+	"./en-ie.js": 245,
+	"./en-nz": 246,
+	"./en-nz.js": 246,
+	"./eo": 247,
+	"./eo.js": 247,
+	"./es": 249,
+	"./es-do": 248,
+	"./es-do.js": 248,
+	"./es.js": 249,
+	"./et": 250,
+	"./et.js": 250,
+	"./eu": 251,
+	"./eu.js": 251,
+	"./fa": 252,
+	"./fa.js": 252,
+	"./fi": 253,
+	"./fi.js": 253,
+	"./fo": 254,
+	"./fo.js": 254,
+	"./fr": 257,
+	"./fr-ca": 255,
+	"./fr-ca.js": 255,
+	"./fr-ch": 256,
+	"./fr-ch.js": 256,
+	"./fr.js": 257,
+	"./fy": 258,
+	"./fy.js": 258,
+	"./gd": 259,
+	"./gd.js": 259,
+	"./gl": 260,
+	"./gl.js": 260,
+	"./gom-latn": 261,
+	"./gom-latn.js": 261,
+	"./he": 262,
+	"./he.js": 262,
+	"./hi": 263,
+	"./hi.js": 263,
+	"./hr": 264,
+	"./hr.js": 264,
+	"./hu": 265,
+	"./hu.js": 265,
+	"./hy-am": 266,
+	"./hy-am.js": 266,
+	"./id": 267,
+	"./id.js": 267,
+	"./is": 268,
+	"./is.js": 268,
+	"./it": 269,
+	"./it.js": 269,
+	"./ja": 270,
+	"./ja.js": 270,
+	"./jv": 271,
+	"./jv.js": 271,
+	"./ka": 272,
+	"./ka.js": 272,
+	"./kk": 273,
+	"./kk.js": 273,
+	"./km": 274,
+	"./km.js": 274,
+	"./kn": 275,
+	"./kn.js": 275,
+	"./ko": 276,
+	"./ko.js": 276,
+	"./ky": 277,
+	"./ky.js": 277,
+	"./lb": 278,
+	"./lb.js": 278,
+	"./lo": 279,
+	"./lo.js": 279,
+	"./lt": 280,
+	"./lt.js": 280,
+	"./lv": 281,
+	"./lv.js": 281,
+	"./me": 282,
+	"./me.js": 282,
+	"./mi": 283,
+	"./mi.js": 283,
+	"./mk": 284,
+	"./mk.js": 284,
+	"./ml": 285,
+	"./ml.js": 285,
+	"./mr": 286,
+	"./mr.js": 286,
+	"./ms": 288,
+	"./ms-my": 287,
+	"./ms-my.js": 287,
+	"./ms.js": 288,
+	"./my": 289,
+	"./my.js": 289,
+	"./nb": 290,
+	"./nb.js": 290,
+	"./ne": 291,
+	"./ne.js": 291,
+	"./nl": 293,
+	"./nl-be": 292,
+	"./nl-be.js": 292,
+	"./nl.js": 293,
+	"./nn": 294,
+	"./nn.js": 294,
+	"./pa-in": 295,
+	"./pa-in.js": 295,
+	"./pl": 296,
+	"./pl.js": 296,
+	"./pt": 298,
+	"./pt-br": 297,
+	"./pt-br.js": 297,
+	"./pt.js": 298,
+	"./ro": 299,
+	"./ro.js": 299,
+	"./ru": 300,
+	"./ru.js": 300,
+	"./sd": 301,
+	"./sd.js": 301,
+	"./se": 302,
+	"./se.js": 302,
+	"./si": 303,
+	"./si.js": 303,
+	"./sk": 304,
+	"./sk.js": 304,
+	"./sl": 305,
+	"./sl.js": 305,
+	"./sq": 306,
+	"./sq.js": 306,
+	"./sr": 308,
+	"./sr-cyrl": 307,
+	"./sr-cyrl.js": 307,
+	"./sr.js": 308,
+	"./ss": 309,
+	"./ss.js": 309,
+	"./sv": 310,
+	"./sv.js": 310,
+	"./sw": 311,
+	"./sw.js": 311,
+	"./ta": 312,
+	"./ta.js": 312,
+	"./te": 313,
+	"./te.js": 313,
+	"./tet": 314,
+	"./tet.js": 314,
+	"./th": 315,
+	"./th.js": 315,
+	"./tl-ph": 316,
+	"./tl-ph.js": 316,
+	"./tlh": 317,
+	"./tlh.js": 317,
+	"./tr": 318,
+	"./tr.js": 318,
+	"./tzl": 319,
+	"./tzl.js": 319,
+	"./tzm": 321,
+	"./tzm-latn": 320,
+	"./tzm-latn.js": 320,
+	"./tzm.js": 321,
+	"./uk": 322,
+	"./uk.js": 322,
+	"./ur": 323,
+	"./ur.js": 323,
+	"./uz": 325,
+	"./uz-latn": 324,
+	"./uz-latn.js": 324,
+	"./uz.js": 325,
+	"./vi": 326,
+	"./vi.js": 326,
+	"./x-pseudo": 327,
+	"./x-pseudo.js": 327,
+	"./yo": 328,
+	"./yo.js": 328,
+	"./zh-cn": 329,
+	"./zh-cn.js": 329,
+	"./zh-hk": 330,
+	"./zh-hk.js": 330,
+	"./zh-tw": 331,
+	"./zh-tw.js": 331
 };
 function webpackContext(req) {
 	return __webpack_require__(webpackContextResolve(req));
@@ -128881,10 +129295,10 @@ webpackContext.keys = function webpackContextKeys() {
 };
 webpackContext.resolve = webpackContextResolve;
 module.exports = webpackContext;
-webpackContext.id = 620;
+webpackContext.id = 623;
 
 /***/ }),
-/* 621 */
+/* 624 */
 /***/ (function(module, exports) {
 
 /**
@@ -129039,420 +129453,6 @@ function plural(ms, n, name) {
   }
   return Math.ceil(ms / n) + ' ' + name + 's';
 }
-
-
-/***/ }),
-/* 622 */
-/***/ (function(module, exports, __webpack_require__) {
-
-
-/**
- * index.js
- *
- * a request API compatible with window.fetch
- */
-
-var parse_url = __webpack_require__(17).parse;
-var resolve_url = __webpack_require__(17).resolve;
-var http = __webpack_require__(36);
-var https = __webpack_require__(75);
-var zlib = __webpack_require__(356);
-var stream = __webpack_require__(11);
-
-var Body = __webpack_require__(138);
-var Response = __webpack_require__(624);
-var Headers = __webpack_require__(139);
-var Request = __webpack_require__(623);
-var FetchError = __webpack_require__(331);
-
-// commonjs
-module.exports = Fetch;
-// es6 default export compatibility
-module.exports.default = module.exports;
-
-/**
- * Fetch class
- *
- * @param   Mixed    url   Absolute url or Request instance
- * @param   Object   opts  Fetch options
- * @return  Promise
- */
-function Fetch(url, opts) {
-
-	// allow call as function
-	if (!(this instanceof Fetch))
-		return new Fetch(url, opts);
-
-	// allow custom promise
-	if (!Fetch.Promise) {
-		throw new Error('native promise missing, set Fetch.Promise to your favorite alternative');
-	}
-
-	Body.Promise = Fetch.Promise;
-
-	var self = this;
-
-	// wrap http.request into fetch
-	return new Fetch.Promise(function(resolve, reject) {
-		// build request object
-		var options = new Request(url, opts);
-
-		if (!options.protocol || !options.hostname) {
-			throw new Error('only absolute urls are supported');
-		}
-
-		if (options.protocol !== 'http:' && options.protocol !== 'https:') {
-			throw new Error('only http(s) protocols are supported');
-		}
-
-		var send;
-		if (options.protocol === 'https:') {
-			send = https.request;
-		} else {
-			send = http.request;
-		}
-
-		// normalize headers
-		var headers = new Headers(options.headers);
-
-		if (options.compress) {
-			headers.set('accept-encoding', 'gzip,deflate');
-		}
-
-		if (!headers.has('user-agent')) {
-			headers.set('user-agent', 'node-fetch/1.0 (+https://github.com/bitinn/node-fetch)');
-		}
-
-		if (!headers.has('connection') && !options.agent) {
-			headers.set('connection', 'close');
-		}
-
-		if (!headers.has('accept')) {
-			headers.set('accept', '*/*');
-		}
-
-		// detect form data input from form-data module, this hack avoid the need to pass multipart header manually
-		if (!headers.has('content-type') && options.body && typeof options.body.getBoundary === 'function') {
-			headers.set('content-type', 'multipart/form-data; boundary=' + options.body.getBoundary());
-		}
-
-		// bring node-fetch closer to browser behavior by setting content-length automatically
-		if (!headers.has('content-length') && /post|put|patch|delete/i.test(options.method)) {
-			if (typeof options.body === 'string') {
-				headers.set('content-length', Buffer.byteLength(options.body));
-			// detect form data input from form-data module, this hack avoid the need to add content-length header manually
-			} else if (options.body && typeof options.body.getLengthSync === 'function') {
-				// for form-data 1.x
-				if (options.body._lengthRetrievers && options.body._lengthRetrievers.length == 0) {
-					headers.set('content-length', options.body.getLengthSync().toString());
-				// for form-data 2.x
-				} else if (options.body.hasKnownLength && options.body.hasKnownLength()) {
-					headers.set('content-length', options.body.getLengthSync().toString());
-				}
-			// this is only necessary for older nodejs releases (before iojs merge)
-			} else if (options.body === undefined || options.body === null) {
-				headers.set('content-length', '0');
-			}
-		}
-
-		options.headers = headers.raw();
-
-		// http.request only support string as host header, this hack make custom host header possible
-		if (options.headers.host) {
-			options.headers.host = options.headers.host[0];
-		}
-
-		// send request
-		var req = send(options);
-		var reqTimeout;
-
-		if (options.timeout) {
-			req.once('socket', function(socket) {
-				reqTimeout = setTimeout(function() {
-					req.abort();
-					reject(new FetchError('network timeout at: ' + options.url, 'request-timeout'));
-				}, options.timeout);
-			});
-		}
-
-		req.on('error', function(err) {
-			clearTimeout(reqTimeout);
-			reject(new FetchError('request to ' + options.url + ' failed, reason: ' + err.message, 'system', err));
-		});
-
-		req.on('response', function(res) {
-			clearTimeout(reqTimeout);
-
-			// handle redirect
-			if (self.isRedirect(res.statusCode) && options.redirect !== 'manual') {
-				if (options.redirect === 'error') {
-					reject(new FetchError('redirect mode is set to error: ' + options.url, 'no-redirect'));
-					return;
-				}
-
-				if (options.counter >= options.follow) {
-					reject(new FetchError('maximum redirect reached at: ' + options.url, 'max-redirect'));
-					return;
-				}
-
-				if (!res.headers.location) {
-					reject(new FetchError('redirect location header missing at: ' + options.url, 'invalid-redirect'));
-					return;
-				}
-
-				// per fetch spec, for POST request with 301/302 response, or any request with 303 response, use GET when following redirect
-				if (res.statusCode === 303
-					|| ((res.statusCode === 301 || res.statusCode === 302) && options.method === 'POST'))
-				{
-					options.method = 'GET';
-					delete options.body;
-					delete options.headers['content-length'];
-				}
-
-				options.counter++;
-
-				resolve(Fetch(resolve_url(options.url, res.headers.location), options));
-				return;
-			}
-
-			// normalize location header for manual redirect mode
-			var headers = new Headers(res.headers);
-			if (options.redirect === 'manual' && headers.has('location')) {
-				headers.set('location', resolve_url(options.url, headers.get('location')));
-			}
-
-			// prepare response
-			var body = res.pipe(new stream.PassThrough());
-			var response_options = {
-				url: options.url
-				, status: res.statusCode
-				, statusText: res.statusMessage
-				, headers: headers
-				, size: options.size
-				, timeout: options.timeout
-			};
-
-			// response object
-			var output;
-
-			// in following scenarios we ignore compression support
-			// 1. compression support is disabled
-			// 2. HEAD request
-			// 3. no content-encoding header
-			// 4. no content response (204)
-			// 5. content not modified response (304)
-			if (!options.compress || options.method === 'HEAD' || !headers.has('content-encoding') || res.statusCode === 204 || res.statusCode === 304) {
-				output = new Response(body, response_options);
-				resolve(output);
-				return;
-			}
-
-			// otherwise, check for gzip or deflate
-			var name = headers.get('content-encoding');
-
-			// for gzip
-			if (name == 'gzip' || name == 'x-gzip') {
-				body = body.pipe(zlib.createGunzip());
-				output = new Response(body, response_options);
-				resolve(output);
-				return;
-
-			// for deflate
-			} else if (name == 'deflate' || name == 'x-deflate') {
-				// handle the infamous raw deflate response from old servers
-				// a hack for old IIS and Apache servers
-				var raw = res.pipe(new stream.PassThrough());
-				raw.once('data', function(chunk) {
-					// see http://stackoverflow.com/questions/37519828
-					if ((chunk[0] & 0x0F) === 0x08) {
-						body = body.pipe(zlib.createInflate());
-					} else {
-						body = body.pipe(zlib.createInflateRaw());
-					}
-					output = new Response(body, response_options);
-					resolve(output);
-				});
-				return;
-			}
-
-			// otherwise, use response as-is
-			output = new Response(body, response_options);
-			resolve(output);
-			return;
-		});
-
-		// accept string, buffer or readable stream as body
-		// per spec we will call tostring on non-stream objects
-		if (typeof options.body === 'string') {
-			req.write(options.body);
-			req.end();
-		} else if (options.body instanceof Buffer) {
-			req.write(options.body);
-			req.end()
-		} else if (typeof options.body === 'object' && options.body.pipe) {
-			options.body.pipe(req);
-		} else if (typeof options.body === 'object') {
-			req.write(options.body.toString());
-			req.end();
-		} else {
-			req.end();
-		}
-	});
-
-};
-
-/**
- * Redirect code matching
- *
- * @param   Number   code  Status code
- * @return  Boolean
- */
-Fetch.prototype.isRedirect = function(code) {
-	return code === 301 || code === 302 || code === 303 || code === 307 || code === 308;
-}
-
-// expose Promise
-Fetch.Promise = global.Promise;
-Fetch.Response = Response;
-Fetch.Headers = Headers;
-Fetch.Request = Request;
-
-
-/***/ }),
-/* 623 */
-/***/ (function(module, exports, __webpack_require__) {
-
-
-/**
- * request.js
- *
- * Request class contains server only options
- */
-
-var parse_url = __webpack_require__(17).parse;
-var Headers = __webpack_require__(139);
-var Body = __webpack_require__(138);
-
-module.exports = Request;
-
-/**
- * Request class
- *
- * @param   Mixed   input  Url or Request instance
- * @param   Object  init   Custom options
- * @return  Void
- */
-function Request(input, init) {
-	var url, url_parsed;
-
-	// normalize input
-	if (!(input instanceof Request)) {
-		url = input;
-		url_parsed = parse_url(url);
-		input = {};
-	} else {
-		url = input.url;
-		url_parsed = parse_url(url);
-	}
-
-	// normalize init
-	init = init || {};
-
-	// fetch spec options
-	this.method = init.method || input.method || 'GET';
-	this.redirect = init.redirect || input.redirect || 'follow';
-	this.headers = new Headers(init.headers || input.headers || {});
-	this.url = url;
-
-	// server only options
-	this.follow = init.follow !== undefined ?
-		init.follow : input.follow !== undefined ?
-		input.follow : 20;
-	this.compress = init.compress !== undefined ?
-		init.compress : input.compress !== undefined ?
-		input.compress : true;
-	this.counter = init.counter || input.counter || 0;
-	this.agent = init.agent || input.agent;
-
-	Body.call(this, init.body || this._clone(input), {
-		timeout: init.timeout || input.timeout || 0,
-		size: init.size || input.size || 0
-	});
-
-	// server request options
-	this.protocol = url_parsed.protocol;
-	this.hostname = url_parsed.hostname;
-	this.port = url_parsed.port;
-	this.path = url_parsed.path;
-	this.auth = url_parsed.auth;
-}
-
-Request.prototype = Object.create(Body.prototype);
-
-/**
- * Clone this request
- *
- * @return  Request
- */
-Request.prototype.clone = function() {
-	return new Request(this);
-};
-
-
-/***/ }),
-/* 624 */
-/***/ (function(module, exports, __webpack_require__) {
-
-
-/**
- * response.js
- *
- * Response class provides content decoding
- */
-
-var http = __webpack_require__(36);
-var Headers = __webpack_require__(139);
-var Body = __webpack_require__(138);
-
-module.exports = Response;
-
-/**
- * Response class
- *
- * @param   Stream  body  Readable stream
- * @param   Object  opts  Response options
- * @return  Void
- */
-function Response(body, opts) {
-
-	opts = opts || {};
-
-	this.url = opts.url;
-	this.status = opts.status || 200;
-	this.statusText = opts.statusText || http.STATUS_CODES[this.status];
-	this.headers = new Headers(opts.headers);
-	this.ok = this.status >= 200 && this.status < 300;
-
-	Body.call(this, body, opts);
-
-}
-
-Response.prototype = Object.create(Body.prototype);
-
-/**
- * Clone this response
- *
- * @return  Response
- */
-Response.prototype.clone = function() {
-	return new Response(this._clone(this), {
-		url: this.url
-		, status: this.status
-		, statusText: this.statusText
-		, headers: this.headers
-		, ok: this.ok
-	});
-};
 
 
 /***/ }),
@@ -131489,7 +131489,7 @@ exports.Har = Har
 
 var uuid = __webpack_require__(144)
   , CombinedStream = __webpack_require__(167)
-  , isstream = __webpack_require__(211)
+  , isstream = __webpack_require__(212)
   , Buffer = __webpack_require__(56).Buffer
 
 
@@ -132177,13 +132177,13 @@ var http = __webpack_require__(36)
   , aws2 = __webpack_require__(397)
   , aws4 = __webpack_require__(398)
   , httpSignature = __webpack_require__(575)
-  , mime = __webpack_require__(215)
+  , mime = __webpack_require__(216)
   , stringstream = __webpack_require__(648)
   , caseless = __webpack_require__(103)
   , ForeverAgent = __webpack_require__(542)
   , FormData = __webpack_require__(543)
   , extend = __webpack_require__(131)
-  , isstream = __webpack_require__(211)
+  , isstream = __webpack_require__(212)
   , isTypedArray = __webpack_require__(599).strict
   , helpers = __webpack_require__(141)
   , cookies = __webpack_require__(341)
