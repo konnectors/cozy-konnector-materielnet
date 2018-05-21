@@ -23,7 +23,8 @@
         "build": "webpack",
         "lint": "standard --fix konnector.js",
         "deploy:travis": "git-directory-deploy --username nicofrand --email mail@nicofrand.eu --directory build/ --repo=https://$GITHUB_TOKEN@github.com/nicofrand/cozy-konnector-materielnet.git",
-        "deploy": "git-directory-deploy --branch build --directory build/ --repo=https://github.com/nicofrand/cozy-konnector-materielnet.git"
+        "deploy": "git-directory-deploy --branch build --directory build/ --repo=https://github.com/nicofrand/cozy-konnector-materielnet.git",
+        "publish:cozy": "git fetch origin ${DEPLOY_BRANCH:-build}:${DEPLOY_BRANCH:-build} && cozy-app-publish --token $REGISTRY_TOKEN --build-commit $(git rev-parse ${DEPLOY_BRANCH:-build})"
     },
     "devDependencies": {
         "copy-webpack-plugin": "^4.0.1",

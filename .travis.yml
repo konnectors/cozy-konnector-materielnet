@@ -26,3 +26,18 @@ script:
 - yarn build
 after_success:
 - test $TRAVIS_BRANCH = "master" && yarn run deploy:travis -- --branch=build
+before_deploy:
+- yarn add cozy-app-publish
+deploy:
+  - provider: script
+    repo: nicofrand/cozy-konnector-materielnet
+    skip-cleanup: true
+    script: export DEPLOY_BRANCH=build && yarn deploy && yarn publish:cozy
+    on:
+      branch: master
+  - provider: script
+    repo: nicofrand/cozy-konnector-materielnet
+    skip-cleanup: true
+    script: export DEPLOY_BRANCH=build && yarn publish:cozy
+    on:
+      tags: true
