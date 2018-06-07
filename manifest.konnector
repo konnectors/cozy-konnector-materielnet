@@ -1,40 +1,43 @@
 {
-  "version": "1.0.3",
+  "version": "1.0.4",
   "name": "Materiel.net",
-  "type": "node",
+  "type": "konnector",
+  "language": "node",
+  "icon": "materielnet.svg",
   "slug": "materielnet",
   "source": "git://github.com/nicofrand/cozy-konnector-materielnet.git",
+  "editor": "nicofrand",
+  "vendor_link": "https://www.materiel.net/pm/client/login.html",
+  "categories": ["shopping"],
   "fields": {
-    "save_folder": {
-      "doctype": "io.cozy.files",
-      "type": "folder"
+    "login": {
+      "type": "text"
     },
-    "account": {
-      "doctype": "io.cozy.accounts",
-      "account_type": "accounttype",
-      "accountFormat": "login,password"
-    }
-  },
-  "locales": {
-    "fr": {
-      "description": "Récupère toutes vos factures",
-      "permissions": {
-        "bills": {
-          "description": "Utilisé pour sauvegarder les données de facturation"
-        },
-        "files": {
-          "description": "Utilisé pour sauvegarder les factures"
-        }
+    "password": {
+      "type": "password"
+    },
+    "advancedFields": {
+      "folderPath": {
+        "advanced": true,
+        "isRequired": false
       }
     }
   },
+  "data_types": [
+    "bill"
+  ],
+  "screenshots": [],
   "permissions": {
+    "bank operations": {
+      "description": "Required to link bank operations to bills",
+      "type": "io.cozy.bank.operations"
+    },
     "bills": {
       "description": "Required to save the bills data",
       "type": "io.cozy.bills"
     },
     "files": {
-      "description": "Required to save the bills",
+      "description": "Required to save the bills files",
       "type": "io.cozy.files"
     },
     "accounts": {
@@ -43,9 +46,34 @@
       "verbs": ["GET"]
     }
   },
-  "editor": "nicofrand",
   "developer": {
     "name": "nicofrand",
     "url": "https://nicofrand.eu"
-  }
+  },
+  "langs": ["fr", "en"],
+  "locales": {
+    "fr": {
+      "short_description": "Récupère vos factures Materiel.net",
+      "long_description": "Récupère vos factures Materiel.net",
+      "permissions": {
+        "bank operations": {
+          "description": "Utilisé pour lier les factures à des opérations bancaires"
+        },
+        "bills": {
+          "description": "Utilisé pour sauvegarder les données de facturation"
+        },
+        "files": {
+          "description": "Utilisé pour sauvegarder les fichiers de factures"
+        },
+        "accounts": {
+          "description": "Utilisé pour obtenir les données du compte"
+        }
+      }
+    },
+    "en": {
+      "short_description": "Fetches your Materiel.net bills",
+      "long_description": "Fetches your Materiel.net bills"
+    }
+  },
+  "manifest_version": "2"
 }
