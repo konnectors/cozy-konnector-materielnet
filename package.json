@@ -1,6 +1,6 @@
 {
     "name": "cozy-konnector-materielnet",
-    "version": "1.0.4",
+    "version": "1.0.5",
     "description": "",
     "repository": {
         "type": "git",
@@ -9,6 +9,7 @@
     "keywords": [],
     "author": "nicofrand <mail@nicofrand.eu> Nicolas Frandeboeuf",
     "license": "AGPL-3.0",
+    "main": "./index.js",
     "dependencies": {
         "cheerio": "0.22.0",
         "cozy-konnector-libs": "2.4.1",
