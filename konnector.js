@@ -73,14 +73,14 @@ function login(requiredFields, billInfos, data, next) {
 
     logger.info('Signing in')
     request(signInOptions, (err, res) => {
-        if (err) {
+        if (err || res.headers.location.match(/login.html/)) {
             logger.error('Signin failed');
             return next('LOGIN_FAILED');
         }
-
+ 
         if (res.headers.location.indexOf('captcha') !== -1) {
             logger.error('Hit captcha webpage');
-            return next('UNKNOWN_ERROR');
+            return next('CHALLENGE_ASKED');
         }
 
         // Download bill information page.
