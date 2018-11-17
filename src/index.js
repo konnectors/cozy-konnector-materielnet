@@ -12,184 +12,200 @@ const {
 
 const logger = {
     info: msg => log("info", msg),
-    error: msg => log("error", msg)
+    error: msg => log("error", msg),
+    debug: msg => log("debug", msg)
 };
 
-const baseURL = "https://www.materiel.net/";
+const baseURL = "https://secure.materiel.net";
 
 const billsTableSelector = "#ListCmd table";
 
 module.exports = new BaseKonnector(start);
 
 async function start(fields) {
-    const html = await login(fields);
-    const bills = parsePage(html);
+    const loginToken = await fetchLoginToken();
+    await login(loginToken, fields);
+    const billsPeriods = await fetchBillsPeriods();
+    const bills = await fetchBills(billsPeriods);
+
+    logger.info(`${bills.length} bill(s) retrieved`);
+
     await saveBills(bills, fields.folderPath, {
         identifiers: ["materiel.net"]
     });
 }
 
-/**
- * @param {string} html
- * @return cheerio[]
- */
-function extractBillsRows(html) {
-    const $ = cheerio.load(html);
-    const container = $(billsTableSelector);
-    return container
-        .find("tr[data-order]")
-        .toArray()
-        .map(r => $(r));
-}
+function fetchLoginToken() {
+    const loginPageTokenOptions = {
+        method: "GET",
+        ecdhCurve: "auto",
+        jar: j,
+        url: `${baseURL}/Login/Login`
+    };
 
-function fetchBillPageBillsList(options, cb) {
-    request(options, (err, res, body) => {
-        if (err) {
-            logger.info(`Could not fetch bills list from ${options.url}`);
-            return cb(null);
-        }
-
-        cb(extractBillsRows(body));
-    });
-}
-
-// Login layer
-function login(requiredFields) {
     return new Promise((resolve, reject) => {
-        const signInOptions = {
-            method: "POST",
-            ecdhCurve: "auto",
-            jar: j,
-            url: `${baseURL}pm/client/logincheck.nt.html`,
-            form: {
-                identifier: requiredFields.login,
-                credentials: requiredFields.password,
-                back: ""
+        logger.info("Retrieving login token");
+        request(loginPageTokenOptions, (err, res) => {
+            let token = "";
+            if (!err) {
+                let $ = cheerio.load(res.body);
+                token = $("#login form input[name='__RequestVerificationToken']").val();
+                if (!token)
+                    err = new Error("No login token found");
             }
-        };
 
-        const billsOptions = {
-            method: "GET",
-            ecdhCurve: "auto",
-            jar: j,
-            url: `${baseURL}pm/client/commande.html`
-        };
-
-        logger.info("Signing in");
-        request(signInOptions, (err, res) => {
-            if (err || res.headers.location.match(/login.html/)) {
-                logger.error("Signin failed");
+            if (err) {
+                logger.debug(err.message);
+                logger.error("Could not retrieve login token");
                 return reject(new Error(errors.LOGIN_FAILED));
             }
 
-            if (res.headers.location.indexOf("captcha") !== -1) {
-                logger.error("Hit captcha webpage");
-                return reject(new Error(errors.CHALLENGE_ASKED));
-            }
-
-            // Download bill information page.
-            logger.info("Fetching bills list");
-            request(billsOptions, (err, res, body) => {
-                if (err) {
-                    logger.error("An error occured while fetching bills list");
-                    return reject(new Error(errors.UNKNOWN_ERROR));
-                }
-
-                // Check if there are several pages
-                const $ = cheerio.load(body);
-                const commandList = $("#ListCmd");
-
-                if (!commandList.length) {
-                    logger.error(
-                        "Could not parse page (did not find expected id)"
-                    );
-                    return reject(new Error(errors.UNKNOWN_ERROR));
-                }
-
-                const otherPages = commandList.find(
-                    ".EpListBLine ul.pagination li.num"
-                ).length;
-                const nbPages = otherPages || 1;
-
-                // If there are are several pages, parse all the pages to retrieve all the
-                // bills
-                if (nbPages > 1) {
-                    let totalPagesParsed = 0;
-                    const billsList = $(billsTableSelector);
-                    const _fetchPageFromIndex = idx => {
-                        const pageOptions = Object.create(billsOptions);
-                        pageOptions.url += `?page=${idx}`;
-                        logger.info(`Fetching page ${idx} of ${nbPages}…`);
-                        fetchBillPageBillsList(pageOptions, rows => {
-                            // We now reinsert the rows in the first page's list
-                            if (rows) {
-                                billsList.append(rows);
-                            }
-
-                            if (++totalPagesParsed === nbPages - 1) {
-                                logger.info("All bills pages fetched");
-                                return resolve($.html());
-                            }
-                        });
-                    };
-
-                    for (let pageIndex = 2; pageIndex <= nbPages; ++pageIndex) {
-                        _fetchPageFromIndex(pageIndex);
-                    }
-                } else {
-                    return resolve(body);
-                }
-            });
+            return resolve(token);
         });
     });
 }
 
-function parsePage(html) {
-    const bills = [];
-
-    const rows = extractBillsRows(html);
-    for (const row of rows) {
-        const cells = row.find("td");
-        // First cell is a number (not the ref)
-        const ref = cells
-            .eq(1)
-            .text()
-            .trim();
-        const date = cells
-            .eq(2)
-            .text()
-            .trim();
-        const price = cells
-            .eq(3)
-            .text()
-            .trim()
-            .replace(" €", "")
-            .replace(",", ".");
-        const status = cells
-            .eq(4)
-            .text()
-            .trim()
-            .toLowerCase();
-
-        // Hacky to way to check without dealing with accents
-        if (status.startsWith("termin") || status.startsWith("commande exp")) {
-            const bill = {
-                date: moment(date, "DD/MM/YYYY").toDate(),
-                amount: parseFloat(price),
-                fileurl: `${baseURL}pm/client/facture.nt.html?ref=${ref}`,
-                filename: `${moment(date, "DD/MM/YYYY").format(
-                    "YYYYMMDD"
-                )}_Materiel.net.pdf`,
-                vendor: "Materiel.net",
-                requestOptions: {
-                    jar: j
-                }
-            };
-
-            bills.push(bill);
+// Login layer
+function login(loginToken, requiredFields) {
+    const signInOptions = {
+        method: "POST",
+        ecdhCurve: "auto",
+        jar: j,
+        url: `https://www.materiel.net/form/submit_login`,
+        form: {
+            Email: requiredFields.login,
+            Password: requiredFields.password,
+            __RequestVerificationToken: loginToken
         }
+    };
+
+    return new Promise((resolve, reject) => {
+        logger.info("Signing in");
+        request(signInOptions, (err, res, body) => {
+            if (!err) {
+                try {
+                    body = JSON.parse(body);
+                    if (!body || !body.authenticationSuccess)
+                        err = new Error("Authentication failed");
+                    else {
+                        let cookie = `ID=${body.user.Id}&KEY=${body.user.AuthenticationCode}`;
+                        j.setCookie(`Customer=${cookie}`, "https://secure.materiel.net");
+                    }
+                }
+                catch (e) {
+                    err = new Error("Cannot parse response");
+                }
+            }
+
+            if (err) {
+                logger.debug(err.message);
+                logger.error("Signin failed");
+                return reject(new Error(errors.LOGIN_FAILED));
+            }
+
+            logger.info("Logged in successfully");
+            return resolve();
+        });
+    });
+}
+
+function fetchBillsPeriods() {
+    const billsOptions = {
+        method: "GET",
+        ecdhCurve: "auto",
+        jar: j,
+        url: `${baseURL}/Orders/CompletedOrdersPeriodSelection`
+    };
+
+    return new Promise((resolve, reject) => {
+        logger.info("Fetching bills periods");
+        request(billsOptions, (err, res, body) => {
+            if (!err) {
+                try {
+                    body = JSON.parse(body);
+                }
+                catch (e) {
+                    err = new Error("Could not parse bills periods list");
+                }
+            }
+
+            if (err) {
+                logger.debug(err.message);
+                logger.error("An error occured while fetching bills periods list");
+                return reject(new Error(errors.UNKNOWN_ERROR));
+            }
+
+            return resolve(body);
+        });
+    });
+}
+
+function fetchBillsFromPeriod(period) {
+    const billsListOptions = {
+        method: "GET",
+        ecdhCurve: "auto",
+        jar: j,
+        url: `${baseURL}/Orders/PartialCompletedOrdersHeader`,
+        form: period
+    };
+
+    return new Promise((resolve, reject) => {
+        logger.info(`Fetching bills list for period ${period.Value}`);
+        request(billsListOptions, (err, res, body) => {
+            if (err) {
+                logger.error(`An error occured while fetching bills list for ${period.Value}`);
+                return reject(new Error(errors.UNKNOWN_ERROR));
+            }
+
+            let bills = [];
+            let $ = cheerio.load(body);
+
+            $(".historic").each((idx, b) => {
+                b = $(b);
+                let billRef = b.find(".historic-cell--ref").text().replace("Nº ", "").trim();
+                let billDate = moment(b.find(".historic-cell--date").text(), "DD/MM/YYYY");
+                let billPrice = parseFloat(
+                    b.find(".historic-cell--price").text()
+                        .replace(" TTC", "")
+                        .replace("€", ".")
+                        .trim()
+                );
+                let billUrl = b.find(".historic-cell--details a").attr("href")
+                    .replace("PartialCompletedOrderContent", "DownloadOrderInvoice");
+
+                bills.push({
+                    ref: billRef,
+                    date: billDate.toDate(),
+                    amount: billPrice,
+                    fileurl: `${baseURL}${billUrl}`,
+                    filename: `${billDate.format("YYYYMMDD")}_Materiel.net.pdf`,
+                    vendor: "Materiel.net",
+                    requestOptions: {
+                        jar: j
+                    }
+                });
+            });
+
+            resolve(bills);
+        });
+    });
+}
+
+function fetchBills(billsPeriods) {
+    let promises = [];
+
+    for (let period of billsPeriods) {
+        promises.push(fetchBillsFromPeriod(period));
     }
 
-    logger.info(`${bills.length} bill(s) retrieved`);
-    return bills;
+    return new Promise((resolve, reject) => {
+        Promise.all(promises).then(bills => {
+            // Flatten the bills
+            bills = bills.reduce((acc, val) => acc.concat(val), []);
+            resolve(bills);
+        })
+        .catch(err => {
+            reject(err);
+        });
+    });
 }
