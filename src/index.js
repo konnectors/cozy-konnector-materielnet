@@ -18,8 +18,6 @@ const logger = {
 
 const baseURL = "https://secure.materiel.net";
 
-const billsTableSelector = "#ListCmd table";
-
 module.exports = new BaseKonnector(start);
 
 async function start(fields) {
