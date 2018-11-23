@@ -1,5 +1,5 @@
 {
-  "version": "1.1.5",
+  "version": "1.1.6",
   "name": "Materiel.net",
   "type": "konnector",
   "language": "node",
@@ -75,6 +75,6 @@
       "long_description": "Fetches your Materiel.net bills"
     }
   },
-  "banksTransactionRegExp": "\\bmateriel\.net\\b",
+  "banksTransactionRegExp": "\\bmateriel.net\\b",
   "manifest_version": "2"
 }
