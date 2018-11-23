@@ -75,5 +75,6 @@
       "long_description": "Fetches your Materiel.net bills"
     }
   },
+  "banksTransactionRegExp": "\\bmateriel\.net\\b",
   "manifest_version": "2"
 }
