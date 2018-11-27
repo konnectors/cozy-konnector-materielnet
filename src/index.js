@@ -80,26 +80,35 @@ function login(loginToken, requiredFields) {
     return new Promise((resolve, reject) => {
         logger.info("Signing in");
         request(signInOptions, (err, res, body) => {
-            if (!err) {
+            let errType = "";
+            if (err) {
+                errType = errors.VENDOR_DOWN;
+            }
+            else {
                 try {
                     body = JSON.parse(body);
-                    if (!body || !body.authenticationSuccess)
-                        err = new Error("Authentication failed");
-                    else {
-                        let cookie = `ID=${body.user.Id}&KEY=${body.user.AuthenticationCode}`;
-                        j.setCookie(`Customer=${cookie}`, "https://secure.materiel.net");
+                    if (!body || !body.authenticationSuccess || !body.user) {
+                        if (typeof(body.loginForm) === "string" && body.loginForm.includes('window.renderCaptcha()')) {
+                            errType = 'USER_ACTION_NEEDED.CAPTCHA';
+                        }
+                        else {
+                            errType = errors.LOGIN_FAILED;
+                        }
                     }
                 }
                 catch (e) {
-                    err = new Error("Cannot parse response");
+                    logger.error("Cannot parse response");
+                    errType = errors.LOGIN_FAILED;
                 }
             }
 
-            if (err) {
-                logger.debug(err.message);
+            if (errType) {
                 logger.error("Signin failed");
-                return reject(new Error(errors.LOGIN_FAILED));
+                return reject(new Error(errType));
             }
+
+            let cookie = `ID=${body.user.Id}&KEY=${body.user.AuthenticationCode}`;
+            j.setCookie(`Customer=${cookie}`, "https://secure.materiel.net");
 
             logger.info("Logged in successfully");
             return resolve();
