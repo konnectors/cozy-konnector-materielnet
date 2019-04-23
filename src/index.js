@@ -18,9 +18,9 @@ const baseURL = "https://secure.materiel.net";
 class MaterielnetKonnector extends CookieKonnector {
     async testSession() {
         const testSessionOptions = {
-            url : 'https://secure.materiel.net/Orders/CompletedOrdersPeriodSelection',
-            followRedirect: false,
-            followAllRedirects: false
+            url : `${baseURL}/Orders/CompletedOrdersPeriodSelection`,
+            followRedirect: false, // Overwrite CookieKonnector follow setting
+            followAllRedirects: false // Overwrite CookieKonnector follow setting
         };
         try {
             await this.request(testSessionOptions);
@@ -30,17 +30,17 @@ class MaterielnetKonnector extends CookieKonnector {
                 return false;
             }
             else {
-                throw new Error(errors.UNKOWN_ERROR);
+                throw new Error(errors.UNKNOWN_ERROR);
             }
         }
         // We encounter a 200 on Orders page
-        logger.info('Login cookies seems to be valid')
+        logger.info("Login cookies seem to be valid");
         return true;
     }
 
     async fetch(fields) {
         if (!(await this.testSession())) {
-            logger.info('Found no correct session, logging in...');
+            logger.info("Found no correct session, logging in...");
             const loginToken = await this.fetchLoginToken();
             await this.login(loginToken, fields);
         }
@@ -86,7 +86,7 @@ class MaterielnetKonnector extends CookieKonnector {
         const signInOptions = {
             method: "POST",
             ecdhCurve: "auto",
-            url: `https://www.materiel.net/form/submit_login`,
+            url: "https://www.materiel.net/form/submit_login",
             form: {
                 Email: requiredFields.login,
                 Password: requiredFields.password,
@@ -103,10 +103,13 @@ class MaterielnetKonnector extends CookieKonnector {
                 }
                 else {
                     try {
-                        body = JSON.parse(body);
+                        // body should be an JSON object directly now, if not we parse it.
+                        if (typeof(body) === "string") {
+                            body = JSON.parse(body);
+                        }
                         if (!body || !body.authenticationSuccess || !body.user) {
-                            if (typeof(body.loginForm) === "string" && body.loginForm.includes('window.renderCaptcha()')) {
-                                errType = 'USER_ACTION_NEEDED.CAPTCHA';
+                            if (typeof(body.loginForm) === "string" && body.loginForm.includes("window.renderCaptcha()")) {
+                                errType = "USER_ACTION_NEEDED.CAPTCHA";
                             }
                             else {
                                 errType = errors.LOGIN_FAILED;
@@ -114,7 +117,6 @@ class MaterielnetKonnector extends CookieKonnector {
                         }
                     }
                     catch (e) {
-                        console.log(e)
                         logger.error("Cannot parse response");
                         errType = errors.LOGIN_FAILED;
                     }
@@ -126,7 +128,7 @@ class MaterielnetKonnector extends CookieKonnector {
                 }
 
                 let cookie = `ID=${body.user.Id}&KEY=${body.user.AuthenticationCode}`;
-                this._jar.setCookie(`Customer=${cookie}`, "https://secure.materiel.net");
+                this._jar.setCookie(`Customer=${cookie}`, baseURL);
 
                 logger.info("Logged in successfully");
                 return resolve();
@@ -146,6 +148,7 @@ class MaterielnetKonnector extends CookieKonnector {
             this.request(billsOptions, (err, res, body) => {
                 if (!err) {
                     try {
+                        // body should be an JSON object directly now, if not we parse it.
                         if (typeof(body) === "string") {
                             body = JSON.parse(body);
                         }
@@ -217,7 +220,7 @@ class MaterielnetKonnector extends CookieKonnector {
         let promises = [];
 
         for (let period of billsPeriods) {
-            promises.push(fetchBillsFromPeriod(period));
+            promises.push(this.fetchBillsFromPeriod(period));
         }
 
         return new Promise((resolve, reject) => {
@@ -235,7 +238,7 @@ class MaterielnetKonnector extends CookieKonnector {
 }
 
 const konnector = new MaterielnetKonnector({
-    //debug: true,
-})
+    debug: false
+});
 
-konnector.run()
+konnector.run();
