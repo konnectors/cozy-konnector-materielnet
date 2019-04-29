@@ -27,18 +27,18 @@
         "publish:cozy": "git fetch origin ${DEPLOY_BRANCH:-build}:${DEPLOY_BRANCH:-build} && cozy-app-publish --token $REGISTRY_TOKEN --build-commit $(git rev-parse ${DEPLOY_BRANCH:-build})"
     },
     "dependencies": {
-        "cheerio": "0.22.0",
-        "cozy-konnector-libs": "4.11.8",
-        "moment": "2.22.2"
+        "cheerio": "1.0.0-rc.3",
+        "cozy-konnector-libs": "4.15.3",
+        "moment": "2.24.0"
     },
     "devDependencies": {
-        "copy-webpack-plugin": "^4.6.0",
-        "cozy-app-publish": "^0.9.0",
-        "cozy-jobs-cli": "^1.5.8",
+        "copy-webpack-plugin": "^5.0.2",
+        "cozy-app-publish": "^0.15.0",
+        "cozy-jobs-cli": "^1.8.3",
         "git-directory-deploy": "^1.5.1",
-        "konitor": "^0.10.0",
-        "svgo": "^1.1.1",
-        "webpack": "^4.26.0",
-        "webpack-cli": "^3.1.2"
+        "konitor": "^0.10.2",
+        "svgo": "^1.2.1",
+        "webpack": "^4.29.6",
+        "webpack-cli": "^3.3.0"
     }
 }
