@@ -3,6 +3,7 @@ const moment = require("moment");
 
 const {
     CookieKonnector,
+    solveCaptcha,
     log,
     errors
 } = require("cozy-konnector-libs");
@@ -16,6 +17,35 @@ const logger = {
 const baseURL = "https://secure.materiel.net";
 
 class MaterielnetKonnector extends CookieKonnector {
+    async fetch(fields) {
+        try {
+            // Try classic execution
+            await this.tryFetch(fields);
+        } catch (err) {
+            if (err.isCaptcha && err.isCaptcha === true) {
+                const $ = cheerio.load(err.body);
+                const websiteKey = $(".g-recaptcha").data("sitekey");
+                const websiteURL = err.url;
+                // Solve captcha
+                const captchaToken = await solveCaptcha({ websiteURL, websiteKey });
+                // End login
+                await this.login(err.loginToken, fields, captchaToken);
+                try {
+                    // Retry execution with new session
+                    await this.tryFetch(fields);
+                } catch (err) {
+                    if (err.isCaptcha && err.isCaptcha === true) {
+                        throw new Error(errors.CAPTCHA_RESOLUTION_FAILED);
+                    } else {
+                        throw err;
+                    }
+                }
+            } else {
+                throw err;
+            }
+        }
+    }
+
     async testSession() {
         const testSessionOptions = {
             url : `${baseURL}/Orders/CompletedOrdersPeriodSelection`,
@@ -38,7 +68,7 @@ class MaterielnetKonnector extends CookieKonnector {
         return true;
     }
 
-    async fetch(fields) {
+    async tryFetch(fields) {
         if (!(await this.testSession())) {
             logger.info("Found no correct session, logging in...");
             const loginToken = await this.fetchLoginToken();
@@ -63,6 +93,12 @@ class MaterielnetKonnector extends CookieKonnector {
         return new Promise((resolve, reject) => {
             logger.info("Retrieving login token");
             this.request(loginPageTokenOptions, (err, res) => {
+                if (err) {
+                    logger.debug(err.message);
+                    logger.error("Could not retrieve login token");
+                    return reject(new Error(errors.LOGIN_FAILED));
+                }
+                // Extract token
                 let token = "";
                 if (!err) {
                     let $ = cheerio.load(res.body);
@@ -70,19 +106,25 @@ class MaterielnetKonnector extends CookieKonnector {
                     if (!token)
                         err = new Error("No login token found");
                 }
-
-                if (err) {
-                    logger.debug(err.message);
-                    logger.error("Could not retrieve login token");
-                    return reject(new Error(errors.LOGIN_FAILED));
+                // Evaluate if a captcha is present
+                if (typeof(res.body) === "string" &&
+                    res.body.includes("window.renderCaptcha()")) {
+                    // We have encounter a captcha
+                    log("warn", "We detect a captcha");
+                    return reject({
+                        "isCaptcha": true,
+                        body: res.body,
+                        url: res.request.uri.href,
+                        loginToken: token});
                 }
+
                 return resolve(token);
             });
         });
     }
 
     // Login layer
-    async login(loginToken, requiredFields) {
+    async login(loginToken, requiredFields, captchaValidationCode) {
         const signInOptions = {
             method: "POST",
             ecdhCurve: "auto",
@@ -90,7 +132,8 @@ class MaterielnetKonnector extends CookieKonnector {
             form: {
                 Email: requiredFields.login,
                 Password: requiredFields.password,
-                __RequestVerificationToken: loginToken
+                __RequestVerificationToken: loginToken,
+                "g-recaptcha-response": captchaValidationCode
             }
         };
 
@@ -108,8 +151,11 @@ class MaterielnetKonnector extends CookieKonnector {
                             body = JSON.parse(body);
                         }
                         if (!body || !body.authenticationSuccess || !body.user) {
-                            if (typeof(body.loginForm) === "string" && body.loginForm.includes("window.renderCaptcha()")) {
+                            if (typeof(body.loginForm) === "string" &&
+                                body.loginForm.includes("window.renderCaptcha()")) {
+                                // We have encounter a captcha AGAIN
                                 errType = "USER_ACTION_NEEDED.CAPTCHA";
+                                log("warn", "We detect a captcha again");
                             }
                             else {
                                 errType = errors.LOGIN_FAILED;
