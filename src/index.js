@@ -96,7 +96,7 @@ class MaterielnetKonnector extends CookieKonnector {
                 if (err) {
                     logger.debug(err.message);
                     logger.error("Could not retrieve login token");
-                    return reject(new Error(errors.LOGIN_FAILED));
+                    return reject(new Error(errors.VENDOR_DOWN));
                 }
                 // Extract token
                 let token = "";
