@@ -15,6 +15,7 @@ const logger = {
 };
 
 const baseURL = "https://secure.materiel.net";
+const captchaFingerprint = "window.renderCaptcha()"
 
 class MaterielnetKonnector extends CookieKonnector {
     async fetch(fields) {
@@ -22,7 +23,7 @@ class MaterielnetKonnector extends CookieKonnector {
             // Try classic execution
             await this.tryFetch(fields);
         } catch (err) {
-            if (err.isCaptcha && err.isCaptcha === true) {
+            if (err.isCaptcha === true) {
                 const $ = cheerio.load(err.body);
                 const websiteKey = $(".g-recaptcha").data("sitekey");
                 const websiteURL = err.url;
@@ -34,7 +35,7 @@ class MaterielnetKonnector extends CookieKonnector {
                     // Retry execution with new session
                     await this.tryFetch(fields);
                 } catch (err) {
-                    if (err.isCaptcha && err.isCaptcha === true) {
+                    if (err.isCaptcha === true) {
                         throw new Error(errors.CAPTCHA_RESOLUTION_FAILED);
                     } else {
                         throw err;
@@ -107,15 +108,15 @@ class MaterielnetKonnector extends CookieKonnector {
                         err = new Error("No login token found");
                 }
                 // Evaluate if a captcha is present
-                if (typeof(res.body) === "string" &&
-                    res.body.includes("window.renderCaptcha()")) {
+                if (res.body.includes(captchaFingerprint)) {
                     // We have encounter a captcha
-                    log("warn", "We detect a captcha");
+                    logger.warn("warn", "We detect a captcha");
                     return reject({
-                        "isCaptcha": true,
+                        isCaptcha: true,
                         body: res.body,
                         url: res.request.uri.href,
-                        loginToken: token});
+                        loginToken: token
+                    });
                 }
 
                 return resolve(token);
@@ -151,8 +152,7 @@ class MaterielnetKonnector extends CookieKonnector {
                             body = JSON.parse(body);
                         }
                         if (!body || !body.authenticationSuccess || !body.user) {
-                            if (typeof(body.loginForm) === "string" &&
-                                body.loginForm.includes("window.renderCaptcha()")) {
+                            if (body.loginForm.includes(captchaFingerprint)) {
                                 // We have encounter a captcha AGAIN
                                 errType = "USER_ACTION_NEEDED.CAPTCHA";
                                 log("warn", "We detect a captcha again");
