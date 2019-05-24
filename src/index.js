@@ -18,28 +18,24 @@ const baseURL = "https://secure.materiel.net";
 const captchaFingerprint = "window.renderCaptcha()"
 
 class MaterielnetKonnector extends CookieKonnector {
-    async fetch(fields) {
+    async fetch(fields, retry = true) {
         try {
             // Try classic execution
             await this.tryFetch(fields);
         } catch (err) {
             if (err.isCaptcha === true) {
-                const $ = cheerio.load(err.body);
-                const websiteKey = $(".g-recaptcha").data("sitekey");
-                const websiteURL = err.url;
-                // Solve captcha
-                const captchaToken = await solveCaptcha({ websiteURL, websiteKey });
-                // End login
-                await this.login(err.loginToken, fields, captchaToken);
-                try {
+                if (retry === false) {
+                    throw new Error(errors.CAPTCHA_RESOLUTION_FAILED);
+                } else {
+                    const $ = cheerio.load(err.body);
+                    const websiteKey = $(".g-recaptcha").data("sitekey");
+                    const websiteURL = err.url;
+                    // Solve captcha
+                    const captchaToken = await solveCaptcha({ websiteURL, websiteKey });
+                    // End login
+                    await this.login(err.loginToken, fields, captchaToken);
                     // Retry execution with new session
-                    await this.tryFetch(fields);
-                } catch (err) {
-                    if (err.isCaptcha === true) {
-                        throw new Error(errors.CAPTCHA_RESOLUTION_FAILED);
-                    } else {
-                        throw err;
-                    }
+                    await this.tryFetch(fields, false);
                 }
             } else {
                 throw err;
