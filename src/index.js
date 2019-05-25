@@ -6,7 +6,8 @@ const { CookieKonnector, solveCaptcha, log, errors } = require('cozy-konnector-l
 const logger = {
     info: msg => log('info', msg),
     error: msg => log('error', msg),
-    debug: msg => log('debug', msg)
+    debug: msg => log('debug', msg),
+    warn: msg => log('warn', msg)
 };
 
 const baseURL = 'https://secure.materiel.net';
