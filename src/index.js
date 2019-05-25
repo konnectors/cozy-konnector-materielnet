@@ -1,21 +1,16 @@
-const cheerio = require("cheerio");
-const moment = require("moment");
+const cheerio = require('cheerio');
+const moment = require('moment');
 
-const {
-    CookieKonnector,
-    solveCaptcha,
-    log,
-    errors
-} = require("cozy-konnector-libs");
+const { CookieKonnector, solveCaptcha, log, errors } = require('cozy-konnector-libs');
 
 const logger = {
-    info: msg => log("info", msg),
-    error: msg => log("error", msg),
-    debug: msg => log("debug", msg)
+    info: msg => log('info', msg),
+    error: msg => log('error', msg),
+    debug: msg => log('debug', msg)
 };
 
-const baseURL = "https://secure.materiel.net";
-const captchaFingerprint = "window.renderCaptcha()"
+const baseURL = 'https://secure.materiel.net';
+const captchaFingerprint = 'window.renderCaptcha()';
 
 class MaterielnetKonnector extends CookieKonnector {
     async fetch(fields, retry = true) {
@@ -28,7 +23,7 @@ class MaterielnetKonnector extends CookieKonnector {
                     throw new Error(errors.CAPTCHA_RESOLUTION_FAILED);
                 } else {
                     const $ = cheerio.load(err.body);
-                    const websiteKey = $(".g-recaptcha").data("sitekey");
+                    const websiteKey = $('.g-recaptcha').data('sitekey');
                     const websiteURL = err.url;
                     // Solve captcha
                     const captchaToken = await solveCaptcha({ websiteURL, websiteKey });
@@ -45,29 +40,27 @@ class MaterielnetKonnector extends CookieKonnector {
 
     async testSession() {
         const testSessionOptions = {
-            url : `${baseURL}/Orders/CompletedOrdersPeriodSelection`,
+            url: `${baseURL}/Orders/CompletedOrdersPeriodSelection`,
             followRedirect: false, // Overwrite CookieKonnector follow setting
             followAllRedirects: false // Overwrite CookieKonnector follow setting
         };
         try {
             await this.request(testSessionOptions);
-        }
-        catch (err) {
+        } catch (err) {
             if (err.statusCode === 302) {
                 return false;
             }
-            else {
-                throw new Error(errors.UNKNOWN_ERROR);
-            }
+
+            throw new Error(errors.UNKNOWN_ERROR);
         }
         // We encounter a 200 on Orders page
-        logger.info("Login cookies seem to be valid");
+        logger.info('Login cookies seem to be valid');
         return true;
     }
 
     async tryFetch(fields) {
         if (!(await this.testSession())) {
-            logger.info("Found no correct session, logging in...");
+            logger.info('Found no correct session, logging in...');
             const loginToken = await this.fetchLoginToken();
             await this.login(loginToken, fields);
         }
@@ -76,43 +69,50 @@ class MaterielnetKonnector extends CookieKonnector {
 
         logger.info(`${bills.length} bill(s) retrieved`);
         await this.saveBills(bills, fields.folderPath, {
-            identifiers: ["materiel.net"]
+            identifiers: ['materiel.net']
         });
     }
 
     async fetchLoginToken() {
         const loginPageTokenOptions = {
-            method: "GET",
-            ecdhCurve: "auto",
+            method: 'GET',
+            ecdhCurve: 'auto',
             url: `${baseURL}/Login/Login`
         };
 
         return new Promise((resolve, reject) => {
-            logger.info("Retrieving login token");
+            logger.info('Retrieving login token');
             this.request(loginPageTokenOptions, (err, res) => {
                 if (err) {
                     logger.debug(err.message);
-                    logger.error("Could not retrieve login token");
+                    logger.error('Could not retrieve login token');
                     return reject(new Error(errors.VENDOR_DOWN));
                 }
                 // Extract token
-                let token = "";
+                let token = '';
                 if (!err) {
                     let $ = cheerio.load(res.body);
                     token = $("#login form input[name='__RequestVerificationToken']").val();
-                    if (!token)
-                        err = new Error("No login token found");
+                    if (!token) {
+                        err = new Error('No login token found');
+                    }
                 }
                 // Evaluate if a captcha is present
                 if (res.body.includes(captchaFingerprint)) {
                     // We have encounter a captcha
-                    logger.warn("warn", "We detect a captcha");
+                    logger.warn('warn', 'Captcha detected');
                     return reject({
                         isCaptcha: true,
                         body: res.body,
                         url: res.request.uri.href,
                         loginToken: token
                     });
+                }
+
+                if (err) {
+                    logger.debug(err.message);
+                    logger.error('Could not retrieve login token');
+                    return reject(new Error(errors.LOGIN_FAILED));
                 }
 
                 return resolve(token);
@@ -123,56 +123,53 @@ class MaterielnetKonnector extends CookieKonnector {
     // Login layer
     async login(loginToken, requiredFields, captchaValidationCode) {
         const signInOptions = {
-            method: "POST",
-            ecdhCurve: "auto",
-            url: "https://www.materiel.net/form/submit_login",
+            method: 'POST',
+            ecdhCurve: 'auto',
+            url: 'https://www.materiel.net/form/submit_login',
             form: {
                 Email: requiredFields.login,
                 Password: requiredFields.password,
                 __RequestVerificationToken: loginToken,
-                "g-recaptcha-response": captchaValidationCode
+                'g-recaptcha-response': captchaValidationCode
             }
         };
 
         return new Promise((resolve, reject) => {
-            logger.info("Signing in");
+            logger.info('Signing in');
             this.request(signInOptions, (err, res, body) => {
-                let errType = "";
+                let errType = '';
                 if (err) {
                     errType = errors.VENDOR_DOWN;
-                }
-                else {
+                } else {
                     try {
                         // body should be an JSON object directly now, if not we parse it.
-                        if (typeof(body) === "string") {
+                        if (typeof body === 'string') {
                             body = JSON.parse(body);
                         }
                         if (!body || !body.authenticationSuccess || !body.user) {
                             if (body.loginForm.includes(captchaFingerprint)) {
                                 // We have encounter a captcha AGAIN
-                                errType = "USER_ACTION_NEEDED.CAPTCHA";
-                                log("warn", "We detect a captcha again");
-                            }
-                            else {
+                                errType = 'USER_ACTION_NEEDED.CAPTCHA';
+                                log('warn', 'We detect a captcha again');
+                            } else {
                                 errType = errors.LOGIN_FAILED;
                             }
                         }
-                    }
-                    catch (e) {
-                        logger.error("Cannot parse response");
+                    } catch (e) {
+                        logger.error('Cannot parse response');
                         errType = errors.LOGIN_FAILED;
                     }
                 }
 
                 if (errType) {
-                    logger.error("Signin failed");
+                    logger.error('Signin failed');
                     return reject(new Error(errType));
                 }
 
                 let cookie = `ID=${body.user.Id}&KEY=${body.user.AuthenticationCode}`;
                 this._jar.setCookie(`Customer=${cookie}`, baseURL);
 
-                logger.info("Logged in successfully");
+                logger.info('Logged in successfully');
                 return resolve();
             });
         });
@@ -180,29 +177,28 @@ class MaterielnetKonnector extends CookieKonnector {
 
     async fetchBillsPeriods() {
         const billsOptions = {
-            method: "GET",
-            ecdhCurve: "auto",
+            method: 'GET',
+            ecdhCurve: 'auto',
             url: `${baseURL}/Orders/CompletedOrdersPeriodSelection`
         };
 
         return new Promise((resolve, reject) => {
-            logger.info("Fetching bills periods");
+            logger.info('Fetching bills periods');
             this.request(billsOptions, (err, res, body) => {
                 if (!err) {
                     try {
                         // body should be an JSON object directly now, if not we parse it.
-                        if (typeof(body) === "string") {
+                        if (typeof body === 'string') {
                             body = JSON.parse(body);
                         }
-                    }
-                    catch (e) {
-                        err = new Error("Could not parse bills periods list");
+                    } catch (e) {
+                        err = new Error('Could not parse bills periods list');
                     }
                 }
 
                 if (err) {
                     logger.debug(err.message);
-                    logger.error("An error occured while fetching bills periods list");
+                    logger.error('An error occured while fetching bills periods list');
                     return reject(new Error(errors.UNKNOWN_ERROR));
                 }
 
@@ -213,8 +209,8 @@ class MaterielnetKonnector extends CookieKonnector {
 
     async fetchBillsFromPeriod(period) {
         const billsListOptions = {
-            method: "GET",
-            ecdhCurve: "auto",
+            method: 'GET',
+            ecdhCurve: 'auto',
             url: `${baseURL}/Orders/PartialCompletedOrdersHeader`,
             form: period
         };
@@ -230,26 +226,34 @@ class MaterielnetKonnector extends CookieKonnector {
                 let bills = [];
                 let $ = cheerio.load(body);
 
-                $(".historic").each((idx, b) => {
+                $('.historic').each((idx, b) => {
                     b = $(b);
-                    let billRef = b.find(".historic-cell--ref").text().replace("Nº ", "").trim();
-                    let billDate = moment(b.find(".historic-cell--date").text(), "DD/MM/YYYY");
+                    let billRef = b
+                        .find('.historic-cell--ref')
+                        .text()
+                        .replace('Nº ', '')
+                        .trim();
+                    let billDate = moment(b.find('.historic-cell--date').text(), 'DD/MM/YYYY');
                     let billPrice = parseFloat(
-                        b.find(".historic-cell--price").text()
-                            .replace(" TTC", "")
-                            .replace("€", ".")
+                        b
+                            .find('.historic-cell--price')
+                            .text()
+                            .replace(' TTC', '')
+                            .replace('€', '.')
                             .trim()
                     );
-                    let billUrl = b.find(".historic-cell--details a").attr("href")
-                        .replace("PartialCompletedOrderContent", "DownloadOrderInvoice");
+                    let billUrl = b
+                        .find('.historic-cell--details a')
+                        .attr('href')
+                        .replace('PartialCompletedOrderContent', 'DownloadOrderInvoice');
 
                     bills.push({
                         ref: billRef,
                         date: billDate.toDate(),
                         amount: billPrice,
                         fileurl: `${baseURL}${billUrl}`,
-                        filename: `${billDate.format("YYYYMMDD")}_Materiel.net.pdf`,
-                        vendor: "Materiel.net"
+                        filename: `${billDate.format('YYYYMMDD')}_Materiel.net.pdf`,
+                        vendor: 'Materiel.net'
                     });
                 });
 
@@ -266,17 +270,17 @@ class MaterielnetKonnector extends CookieKonnector {
         }
 
         return new Promise((resolve, reject) => {
-            Promise.all(promises).then(bills => {
-                // Flatten the bills
-                bills = bills.reduce((acc, val) => acc.concat(val), []);
-                resolve(bills);
-            })
+            Promise.all(promises)
+                .then(bills => {
+                    // Flatten the bills
+                    bills = bills.reduce((acc, val) => acc.concat(val), []);
+                    resolve(bills);
+                })
                 .catch(err => {
                     reject(err);
                 });
         });
     }
-
 }
 
 const konnector = new MaterielnetKonnector({
