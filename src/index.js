@@ -1,5 +1,6 @@
 const cheerio = require('cheerio');
 const moment = require('moment');
+const rootCas = require('ssl-root-cas/latest');
 
 const { CookieKonnector, solveCaptcha, log, errors } = require('cozy-konnector-libs');
 
@@ -12,6 +13,10 @@ const logger = {
 
 const baseURL = 'https://secure.materiel.net';
 const captchaFingerprint = 'window.renderCaptcha()';
+
+const additionalCAs = rootCas.create();
+additionalCAs.addFile(`${__dirname}/../assets/gsrsaovsslca2018.crt`);
+require('https').globalAgent.options.ca = additionalCAs;
 
 class MaterielnetKonnector extends CookieKonnector {
     async fetch(fields, retry = true) {

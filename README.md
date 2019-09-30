@@ -11,8 +11,6 @@ What's Cozy?
 What's this new konnector?
 --------------------------
 
-<YOUR DESCRIPTION HERE>
-
 ### Open a Pull-Request
 
 If you want to work on this konnector and submit code modifications, feel free to open pull-requests! See the [contributing guide][contribute] for more information about how to properly open pull-requests.
@@ -33,8 +31,10 @@ Then just run :
 
 ```sh
 yarn
-yarn standalone
+NODE_EXTRA_CA_CERTS='./assets/gsrsaovsslca2018.crt' yarn standalone
 ```
+
+The CA certificate is downloaded from http://globalsign.tbs-certificats.com/gsrsaovsslca2018.crt.
 
 The requests to the cozy-stack will be stubbed using the [./data/fixture.json] file as source of data
 and when cozy-client is asked to create or update data, the data will be output to the console.
