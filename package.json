@@ -4,7 +4,7 @@
     "description": "",
     "repository": {
         "type": "git",
-        "url": "git+https://github.com/nicofrand/cozy-konnector-materielnet.git"
+        "url": "git+https://github.com/konnectors/cozy-konnector-materielnet.git"
     },
     "keywords": [],
     "author": "nicofrand <mail@nicofrand.eu> Nicolas Frandeboeuf",
@@ -14,19 +14,16 @@
         "build"
     ],
     "scripts": {
-        "start": "node ./src/index.js",
-        "dev": "cozy-run-dev",
-        "standalone": "cozy-run-standalone",
-        "pretest": "npm run clean",
-        "test": "konitor testit .",
-        "check": "konitor check .",
-        "lint": "./node_modules/eslint/bin/eslint.js src/",
-        "pretty": "./node_modules/eslint/bin/eslint.js src/ --fix",
-        "clean": "rm -rf ./data",
-        "build": "webpack",
-        "deploy:travis": "git-directory-deploy --username nicofrand --email mail@nicofrand.eu --directory build/ --repo=https://$GITHUB_TOKEN@github.com/nicofrand/cozy-konnector-materielnet.git",
-        "deploy": "git-directory-deploy --branch build --directory build/ --repo=https://github.com/nicofrand/cozy-konnector-materielnet.git",
-        "publish:cozy": "git fetch origin ${DEPLOY_BRANCH:-build}:${DEPLOY_BRANCH:-build} && cozy-app-publish --token $REGISTRY_TOKEN --build-commit $(git rev-parse ${DEPLOY_BRANCH:-build})"
+    "start": "node ./src/index.js",
+    "dev": "cozy-konnector-dev",
+    "standalone": "cozy-konnector-standalone",
+    "pretest": "npm run clean",
+    "clean": "rm -rf ./data",
+    "build": "webpack",
+    "lint": "eslint --fix .",
+    "deploy": "git-directory-deploy --directory build/ --branch ${DEPLOY_BRANCH:-build} --repo=${DEPLOY_REPOSITORY:-$npm_package_repository_url}",
+    "cozyPublish": "cozy-app-publish --token $REGISTRY_TOKEN --build-commit $(git rev-parse ${DEPLOY_BRANCH:-build})",
+    "travisDeployKey": "./bin/generate_travis_deploy_key"
     },
     "dependencies": {
         "cheerio": "1.0.0-rc.3",
