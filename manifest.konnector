@@ -5,7 +5,7 @@
   "language": "node",
   "icon": "materielnet.svg",
   "slug": "materielnet",
-  "source": "git://github.com/nicofrand/cozy-konnector-materielnet.git",
+  "source": "git@github.com:konnectors/cozy-konnector-materielnet.git",
   "editor": "nicofrand",
   "vendor_link": "https://www.materiel.net/pm/client/login.html",
   "categories": ["shopping"],
