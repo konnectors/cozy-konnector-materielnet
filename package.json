@@ -9,7 +9,6 @@
   "keywords": [],
   "author": "nicofrand <mail@nicofrand.eu> Nicolas Frandeboeuf",
   "license": "AGPL-3.0",
-  "main": "./src/index.js",
   "eslintConfig": {
     "extends": [
       "cozy-app"
