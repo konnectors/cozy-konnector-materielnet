@@ -42,7 +42,7 @@ async function start(fields, cozyParameters) {
   log('info', 'Saving bills data to Cozy')
   await this.saveBills(bills, fields, {
     identifiers: ['Materiel.net'],
-    fileIdAttribute: ['vendorRef'],
+    fileIdAttributes: ['vendorRef'],
     sourceAccount: fields.login,
     sourceAccountIdentifier: fields.login,
     contentType: 'application/pdf'
